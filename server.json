@@ -1,0 +1,36 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.hubertgajewski/playwright-report-mcp",
+  "description": "Run Playwright tests and surface structured results for AI agents doing test failure analysis.",
+  "repository": {
+    "url": "https://github.com/hubertgajewski/playwright-report-mcp",
+    "source": "github"
+  },
+  "version": "1.0.2",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "playwright-report-mcp",
+      "version": "1.0.2",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "PW_DIR",
+          "description": "Root of the Playwright project — used as the working directory when running tests. Defaults to process.cwd().",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "PW_RESULTS_FILE",
+          "description": "Absolute path to the JSON reporter output file. Defaults to <PW_DIR>/test-results/results.json.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}
