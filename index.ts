@@ -2,7 +2,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { spawnSync } from 'child_process';
-import { readFileSync, statSync } from 'fs';
+import { readFileSync, realpathSync, statSync } from 'fs';
 import { join, relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { z } from 'zod';
@@ -278,7 +278,7 @@ server.registerTool(
 
 export { collectSpecs, server };
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
