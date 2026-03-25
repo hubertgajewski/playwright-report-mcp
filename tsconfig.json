@@ -5,7 +5,9 @@
     "moduleResolution": "NodeNext",
     "outDir": "dist",
     "rootDir": ".",
-    "strict": true
+    "strict": true,
+    "types": ["node"]
   },
-  "include": ["index.ts", "vitest.config.ts", "test/**/*.ts"]
+  "include": ["index.ts"],
+  "exclude": ["test", "vitest.config.ts"]
 }
