@@ -91,11 +91,27 @@ The primary use case: your CI pipeline runs the tests, the agent picks up the re
 
 ## Quick start
 
-**1. Build the server**
+**1. Install via npx (recommended)**
+
+No clone or build step needed — npx downloads and runs the server automatically:
+
+```json
+{
+  "mcpServers": {
+    "playwright-report-mcp": {
+      "command": "npx",
+      "args": ["-y", "playwright-report-mcp"],
+      "type": "stdio"
+    }
+  }
+}
+```
+
+Or build from source:
 
 ```bash
-git clone https://github.com/hubertgajewski/playwright-report.git
-cd playwright-report
+git clone https://github.com/hubertgajewski/playwright-report-mcp.git
+cd playwright-report-mcp
 npm install && npm run build
 ```
 
@@ -114,9 +130,9 @@ reporter: [
 ```json
 {
   "mcpServers": {
-    "playwright-report": {
-      "command": "node",
-      "args": ["/absolute/path/to/playwright-report/dist/index.js"],
+    "playwright-report-mcp": {
+      "command": "npx",
+      "args": ["-y", "playwright-report-mcp"],
       "type": "stdio"
     }
   }
@@ -193,9 +209,13 @@ The `error-context` attachment is the most useful for projects without custom fi
 
 ## Installation
 
+**Via npx (recommended)** — use the npx config shown in [Quick start](#quick-start). No local installation needed.
+
+**From source:**
+
 ```bash
-git clone https://github.com/hubertgajewski/playwright-report.git
-cd playwright-report
+git clone https://github.com/hubertgajewski/playwright-report-mcp.git
+cd playwright-report-mcp
 npm install
 npm run build
 ```
@@ -209,9 +229,9 @@ Add to your `.mcp.json` at the root of your project:
 ```json
 {
   "mcpServers": {
-    "playwright-report": {
-      "command": "node",
-      "args": ["/absolute/path/to/playwright-report/dist/index.js"],
+    "playwright-report-mcp": {
+      "command": "npx",
+      "args": ["-y", "playwright-report-mcp"],
       "type": "stdio"
     }
   }
@@ -234,15 +254,15 @@ Use `PW_DIR` to point the server at any Playwright project directory. Register a
 ```json
 {
   "mcpServers": {
-    "playwright-report-e2e": {
-      "command": "node",
-      "args": ["/absolute/path/to/playwright-report/dist/index.js"],
+    "playwright-report-mcp-e2e": {
+      "command": "npx",
+      "args": ["-y", "playwright-report-mcp"],
       "env": { "PW_DIR": "/absolute/path/to/your/e2e/project" },
       "type": "stdio"
     },
-    "playwright-report-integration": {
-      "command": "node",
-      "args": ["/absolute/path/to/playwright-report/dist/index.js"],
+    "playwright-report-mcp-integration": {
+      "command": "npx",
+      "args": ["-y", "playwright-report-mcp"],
       "env": { "PW_DIR": "/absolute/path/to/your/integration/project" },
       "type": "stdio"
     }
