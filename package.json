@@ -1,10 +1,32 @@
 {
-  "name": "playwright-report",
+  "name": "playwright-report-mcp",
   "version": "1.0.0",
+  "description": "MCP server for running Playwright tests and reading structured results — designed for AI agents doing test failure analysis",
   "type": "module",
   "main": "dist/index.js",
+  "files": [
+    "dist"
+  ],
   "engines": {
     "node": ">=18"
+  },
+  "keywords": [
+    "playwright",
+    "mcp",
+    "model-context-protocol",
+    "testing",
+    "test-results",
+    "ai",
+    "llm"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hubertgajewski/playwright-report-mcp.git"
+  },
+  "homepage": "https://github.com/hubertgajewski/playwright-report-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/hubertgajewski/playwright-report-mcp/issues"
   },
   "scripts": {
     "build": "tsc",
