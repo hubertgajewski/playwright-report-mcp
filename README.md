@@ -21,6 +21,7 @@ An MCP (Model Context Protocol) server for running Playwright tests and reading 
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
 - [Contributing](#contributing)
+- [Release](#release)
 - [License](#license)
 
 ---
@@ -328,6 +329,24 @@ Tests use [Vitest](https://vitest.dev/) and cover the `collectSpecs` helper (uni
 Bug reports and pull requests are welcome. Please open an issue first for significant changes.
 
 ---
+
+## Release
+
+Releases are published to npm by [`.github/workflows/publish-npm.yml`](.github/workflows/publish-npm.yml) when a GitHub Release is marked **published**. Merging to `main` does not trigger a publish.
+
+**Flow:**
+
+1. Open a bump PR that updates all three version fields: `package.json.version`, `server.json.version`, and `server.json.packages[0].version`. Merge it to `main`.
+2. Draft a GitHub Release pointing at the bump commit (tag `v<version>`), then publish the release.
+3. The workflow reads the version from `package.json`, verifies the three version fields match, confirms the version is not already on npm, runs `npm run build` and `npm test`, then publishes with `npm publish --access public --provenance`.
+
+**Required repository secret:**
+
+| Name | How to create | Scope |
+|---|---|---|
+| `NPM_TOKEN` | [npmjs.com → Access Tokens → Generate New Token → "Automation"](https://www.npmjs.com/settings/~/tokens) | Write access to the `playwright-report-mcp` package |
+
+**Recovery from a failed publish:** npm refuses to republish an existing version and restricts unpublishing after 72 hours. If a publish fails for any reason, bump to the next patch version in a new PR and cut a new release — do not try to re-run the failed release.
 
 ## License
 
