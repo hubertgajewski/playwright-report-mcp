@@ -171,9 +171,15 @@ server.registerTool(
         .enum(['Chromium', 'Firefox', 'Webkit', 'Mobile Chrome', 'Mobile Safari'])
         .optional(),
       tag: z.string().optional().describe('Tag filter, e.g. @smoke or @regression'),
+      timeout: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('Timeout in seconds for the whole test run. Defaults to 300.'),
     },
   },
-  async ({ spec, browser, tag }) => {
+  async ({ spec, browser, tag, timeout }) => {
     const cmd = ['npx', 'playwright', 'test'];
     if (spec) {
       const resolved = resolve(PW_DIR, spec);
@@ -184,7 +190,7 @@ server.registerTool(
     if (browser) cmd.push('--project', browser);
     if (tag) cmd.push('--grep', tag);
 
-    const result = runPlaywright(cmd, 300_000);
+    const result = runPlaywright(cmd, timeout ? timeout * 1000 : 300_000);
 
     if (result.error) return err(`Failed to spawn Playwright: ${result.error.message}`);
 
