@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { parseListJson, server } from '../index.js';
+import { buildListTestsCmd, parseListJson, server } from '../index.js';
 
 let client: Client;
 
@@ -220,5 +220,85 @@ describe('parseListJson — tag extraction', () => {
 
   it('throws when JSON is malformed', () => {
     expect(() => parseListJson('{"suites": [')).toThrow();
+  });
+
+  it('ignores trailing warnings after the JSON body', () => {
+    const json = JSON.stringify({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 't',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              tags: ['smoke'],
+              tests: [{ projectName: 'Chromium', results: [] }],
+            },
+          ],
+        },
+      ],
+    });
+    const trailed = `${json}\n(node:123) DeprecationWarning: The something is deprecated\n`;
+    const tests = parseListJson(trailed);
+    expect(tests).toHaveLength(1);
+    expect(tests[0].tags).toEqual(['@smoke']);
+  });
+
+  it('handles braces inside string values', () => {
+    const json = JSON.stringify({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 'renders {placeholder} and "quoted" text',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              tags: ['smoke'],
+              tests: [{ projectName: 'Chromium', results: [] }],
+            },
+          ],
+        },
+      ],
+    });
+    const tests = parseListJson(json);
+    expect(tests).toEqual([
+      {
+        title: 'renders {placeholder} and "quoted" text',
+        file: 'tests/x.spec.ts',
+        tags: ['@smoke'],
+      },
+    ]);
+  });
+
+  it('throws when the opening brace has no matching close', () => {
+    expect(() => parseListJson('prefix\n{"suites": [1, 2')).toThrow(/unbalanced/i);
+  });
+});
+
+describe('buildListTestsCmd', () => {
+  it('requests the JSON reporter with --list', () => {
+    expect(buildListTestsCmd()).toEqual([
+      'npx',
+      'playwright',
+      'test',
+      '--list',
+      '--reporter=json',
+    ]);
+  });
+
+  it('appends --grep when a tag is provided', () => {
+    expect(buildListTestsCmd('@smoke')).toEqual([
+      'npx',
+      'playwright',
+      'test',
+      '--list',
+      '--reporter=json',
+      '--grep',
+      '@smoke',
+    ]);
   });
 });

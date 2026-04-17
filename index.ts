@@ -91,16 +91,51 @@ function runPlaywright(cmd: string[], timeoutMs: number) {
   });
 }
 
+function buildListTestsCmd(tag?: string): string[] {
+  const cmd = ['npx', 'playwright', 'test', '--list', '--reporter=json'];
+  if (tag) cmd.push('--grep', tag);
+  return cmd;
+}
+
+/**
+ * Extract a balanced JSON object from stdout. The JSON reporter writes `{` at
+ * column 0; we scan forward tracking string state and brace depth so that any
+ * trailing warnings Playwright prints after the report don't poison the slice.
+ */
+function extractJsonObject(stdout: string): string {
+  const start = stdout.search(/^\{/m);
+  if (start < 0) throw new Error('Playwright --list output contained no JSON object.');
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < stdout.length; i++) {
+    const c = stdout[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (c === '\\') {
+      escape = true;
+      continue;
+    }
+    if (c === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (c === '{') depth++;
+    else if (c === '}' && --depth === 0) return stdout.slice(start, i + 1);
+  }
+  throw new Error('Playwright --list output had unbalanced JSON braces.');
+}
+
 /**
  * Parse `npx playwright test --list --reporter=json` stdout into a deduplicated
- * list of tests with @-prefixed tags. Dotenv/warning lines before the JSON body
- * are tolerated; anything else throws.
+ * list of tests with @-prefixed tags. Dotenv/warning lines before or after the
+ * JSON body are tolerated; malformed or missing JSON throws.
  */
 function parseListJson(stdout: string): Array<{ title: string; file: string; tags: string[] }> {
-  // JSON reporter writes `{` at column 0. Anything before (dotenv tips, warnings) is skipped.
-  const match = stdout.match(/^\{[\s\S]*\}\s*$/m);
-  if (!match) throw new Error('Playwright --list output contained no JSON object.');
-  const report = JSON.parse(match[0]) as PwReport;
+  const report = JSON.parse(extractJsonObject(stdout)) as { suites?: PwSuite[] };
 
   const seen = new Set<string>();
   const tests: Array<{ title: string; file: string; tags: string[] }> = [];
@@ -266,10 +301,7 @@ server.registerTool(
     },
   },
   async ({ tag }) => {
-    const cmd = ['npx', 'playwright', 'test', '--list', '--reporter=json'];
-    if (tag) cmd.push('--grep', tag);
-
-    const result = runPlaywright(cmd, 30_000);
+    const result = runPlaywright(buildListTestsCmd(tag), 30_000);
 
     if (result.error) return err(`Failed to spawn Playwright: ${result.error.message}`);
 
@@ -287,7 +319,7 @@ server.registerTool(
   }
 );
 
-export { collectSpecs, parseListJson, server };
+export { buildListTestsCmd, collectSpecs, parseListJson, server };
 
 if (realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const transport = new StdioServerTransport();
