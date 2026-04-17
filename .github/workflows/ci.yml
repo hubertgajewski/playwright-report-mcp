@@ -8,12 +8,30 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['20', '22']
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: ${{ matrix.node-version }}
           cache: 'npm'
       - run: npm ci
       - run: npm run build
       - run: npm test
+      - name: Run coverage
+        run: npx vitest run --coverage
+      - name: Report coverage on PR
+        if: matrix.node-version == '22' && github.event_name == 'pull_request'
+        uses: davelosert/vitest-coverage-report-action@v2
+      - name: Upload coverage artifact
+        if: matrix.node-version == '22'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
