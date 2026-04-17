@@ -36,6 +36,7 @@ interface PwSpec {
   file: string;
   line: number;
   ok: boolean;
+  tags?: string[];
   tests: PwTest[];
 }
 
@@ -88,6 +89,29 @@ function runPlaywright(cmd: string[], timeoutMs: number) {
     timeout: timeoutMs,
     maxBuffer: 10 * 1024 * 1024,
   });
+}
+
+/**
+ * Parse `npx playwright test --list --reporter=json` stdout into a deduplicated
+ * list of tests with @-prefixed tags. Dotenv/warning lines before the JSON body
+ * are tolerated; anything else throws.
+ */
+function parseListJson(stdout: string): Array<{ title: string; file: string; tags: string[] }> {
+  // JSON reporter writes `{` at column 0. Anything before (dotenv tips, warnings) is skipped.
+  const match = stdout.match(/^\{[\s\S]*\}\s*$/m);
+  if (!match) throw new Error('Playwright --list output contained no JSON object.');
+  const report = JSON.parse(match[0]) as PwReport;
+
+  const seen = new Set<string>();
+  const tests: Array<{ title: string; file: string; tags: string[] }> = [];
+  for (const { spec, file } of collectSpecs(report.suites ?? [])) {
+    const key = `${file}::${spec.line}::${spec.title}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const tags = (spec.tags ?? []).map((t) => (t.startsWith('@') ? t : `@${t}`));
+    tests.push({ title: spec.title, file, tags });
+  }
+  return tests;
 }
 
 function ok(data: unknown) {
@@ -242,41 +266,28 @@ server.registerTool(
     },
   },
   async ({ tag }) => {
-    const cmd = ['npx', 'playwright', 'test', '--list'];
+    const cmd = ['npx', 'playwright', 'test', '--list', '--reporter=json'];
     if (tag) cmd.push('--grep', tag);
 
     const result = runPlaywright(cmd, 30_000);
 
     if (result.error) return err(`Failed to spawn Playwright: ${result.error.message}`);
 
-    // Output format: "  [Chromium] › tests/navigation.spec.ts:6:1 › home page @smoke"
-    const lines = (result.stdout ?? '').split('\n');
-    const seen = new Set<string>();
-    const tests: Array<{ title: string; file: string; tags: string[] }> = [];
-
-    for (const line of lines) {
-      const m = line.match(/›\s+(.+?):(\d+):\d+\s+›\s+(.+)/);
-      if (!m) continue;
-      const [, file, , titleRaw] = m;
-      const tags = [...titleRaw.matchAll(/@\w+/g)].map((t) => t[0]);
-      const title = titleRaw.trim();
-      const key = `${file}::${title}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        tests.push({ title, file, tags });
-      }
-    }
-
-    if (tests.length === 0 && lines.some((l) => l.trim().length > 0))
+    const stdout = result.stdout ?? '';
+    let tests: Array<{ title: string; file: string; tags: string[] }>;
+    try {
+      tests = parseListJson(stdout);
+    } catch (e) {
       return err(
-        'list_tests parsed 0 tests from non-empty output — Playwright --list format may have changed.'
+        `Failed to parse Playwright --list JSON output: ${(e as Error).message}\nstderr: ${result.stderr ?? ''}`
       );
+    }
 
     return ok({ count: tests.length, tests });
   }
 );
 
-export { collectSpecs, server };
+export { collectSpecs, parseListJson, server };
 
 if (realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const transport = new StdioServerTransport();
