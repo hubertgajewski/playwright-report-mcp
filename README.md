@@ -358,13 +358,14 @@ Bug reports and pull requests are welcome. Please open an issue first for signif
 
 ## Release
 
-Releases are published to npm by [`.github/workflows/publish-npm.yml`](.github/workflows/publish-npm.yml) when a GitHub Release is marked **published**. Merging to `main` does not trigger a publish.
+Releases are published to npm by [`.github/workflows/publish-npm.yml`](.github/workflows/publish-npm.yml) and to the MCP registry by [`.github/workflows/publish-mcp.yml`](.github/workflows/publish-mcp.yml) when a GitHub Release is marked **published**. Merging to `main` does not trigger a publish.
 
 **Flow:**
 
 1. Open a bump PR that updates all three version fields: `package.json.version`, `server.json.version`, and `server.json.packages[0].version`. Merge it to `main`.
 2. Draft a GitHub Release pointing at the bump commit (tag `v<version>`), then publish the release.
-3. The workflow reads the version from `package.json`, verifies the three version fields match, confirms the version is not already on npm, runs `npm run build` and `npm test`, then publishes with `npm publish --access public --provenance`.
+3. `publish-npm.yml` reads the version from `package.json`, verifies the three version fields match, confirms the version is not already on npm, runs `npm run build` and `npm test`, then publishes with `npm publish --access public --provenance`.
+4. `publish-mcp.yml` chains off `publish-npm.yml` via `workflow_run`: once npm publish succeeds, it re-verifies the version fields, confirms the version is not already on the MCP registry, authenticates via GitHub OIDC, and publishes `server.json` to [registry.modelcontextprotocol.io](https://registry.modelcontextprotocol.io). No additional repository secret is required for MCP publishing — OIDC handles auth.
 
 **Required repository secret:**
 
