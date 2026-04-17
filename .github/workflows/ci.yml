@@ -59,5 +59,7 @@ jobs:
         if: steps.pw-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium
         working-directory: test/fixtures/pw-project
+      # Fixture already installed above; invoke vitest directly to avoid a
+      # redundant npm ci --prefix that `npm run test:e2e` would otherwise add.
       - name: Run e2e tests
         run: npx vitest run --config vitest.e2e.config.ts

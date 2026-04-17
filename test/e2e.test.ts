@@ -34,6 +34,8 @@ function chromiumInstalled(): boolean {
 }
 
 const skipReasons: string[] = [];
+if (!existsSync(DIST_INDEX))
+  skipReasons.push('server not built — run: npm run build');
 if (!fixtureInstalled())
   skipReasons.push('fixture not installed — run: npm ci --prefix test/fixtures/pw-project');
 if (!chromiumInstalled())
@@ -82,7 +84,6 @@ describe.skipIf(SKIP)('MCP server e2e — fixture Playwright project', () => {
   describe('list_tests', () => {
     it('returns all tests from the fixture project', async () => {
       const data = parseResult(await client.callTool({ name: 'list_tests', arguments: {} }));
-      // fixture has 3 specs: homepage, smoke, failing
       expect(data.count).toBeGreaterThanOrEqual(3);
       expect(data.tests).toEqual(
         expect.arrayContaining([
