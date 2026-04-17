@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag matches version fields
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          pkg_version=$(jq -r .version package.json)
+          server_version=$(jq -r .version server.json)
+          server_pkg_version=$(jq -r '.packages[0].version' server.json)
+
+          echo "Tag version:               $tag_version"
+          echo "package.json version:      $pkg_version"
+          echo "server.json version:       $server_version"
+          echo "server.json packages[0]:   $server_pkg_version"
+
+          if [ "$tag_version" != "$pkg_version" ] \
+            || [ "$tag_version" != "$server_version" ] \
+            || [ "$tag_version" != "$server_pkg_version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match all three version fields. Bump package.json, server.json (top-level), and server.json packages[0] to the same value before tagging."
+            exit 1
+          fi
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag

@@ -20,6 +20,7 @@ An MCP (Model Context Protocol) server for running Playwright tests and reading 
 - [Requirements](#requirements)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
+- [Cutting a release](#cutting-a-release)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -320,6 +321,31 @@ npm run test:watch  # watch mode
 ```
 
 Tests use [Vitest](https://vitest.dev/) and cover the `collectSpecs` helper (unit) and all four MCP tools via `InMemoryTransport` (integration). No build step or Playwright installation required to run the test suite.
+
+---
+
+## Cutting a release
+
+Releases are produced by pushing a `v*` tag. A GitHub Actions workflow (`.github/workflows/release.yml`) picks up the tag, verifies the version fields are in sync, and creates a GitHub Release with auto-generated notes categorized per `.github/release.yml` (Features / Bug fixes / Documentation / Dependencies / Other changes).
+
+**Version lives in three places and all three must match before tagging:**
+
+- `package.json` → `version`
+- `server.json` → top-level `version`
+- `server.json` → `packages[0].version`
+
+Bump all three in one PR and merge to `main` before cutting the release. The workflow refuses to create a release if the tag disagrees with any of these values.
+
+**Ritual:**
+
+```bash
+# After the version-bump PR has merged to main:
+git checkout main && git pull
+git tag v1.0.5
+git push origin v1.0.5
+# → .github/workflows/release.yml fires
+# → GitHub Release created with auto-generated, categorized notes
+```
 
 ---
 
