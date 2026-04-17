@@ -1,7 +1,19 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>();
+  return {
+    ...actual,
+    spawnSync: vi.fn(() => ({ status: 0, stdout: '', stderr: '' })),
+  };
+});
+
+import { spawnSync } from 'child_process';
 import { buildListTestsCmd, parseListJson, server } from '../index.js';
+
+const spawnSyncMock = spawnSync as unknown as ReturnType<typeof vi.fn>;
 
 let client: Client;
 
@@ -84,6 +96,27 @@ describe('run_tests — spec path validation', () => {
     expect(result.isError).toBe(true);
     const text = (result.content as TextContent[])[0].text;
     expect(text).toContain('within the project directory');
+  });
+});
+
+describe('run_tests — timeout', () => {
+  beforeEach(() => spawnSyncMock.mockClear());
+
+  it('defaults to 300 seconds when timeout is omitted', async () => {
+    await client.callTool({ name: 'run_tests', arguments: {} });
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+    expect(spawnSyncMock.mock.calls[0][2]).toMatchObject({ timeout: 300_000 });
+  });
+
+  it('passes the custom timeout to spawnSync in milliseconds', async () => {
+    await client.callTool({ name: 'run_tests', arguments: { timeout: 60 } });
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+    expect(spawnSyncMock.mock.calls[0][2]).toMatchObject({ timeout: 60_000 });
+  });
+
+  it('rejects non-positive timeout values', async () => {
+    const result = await client.callTool({ name: 'run_tests', arguments: { timeout: 0 } });
+    expect(result.isError).toBe(true);
   });
 });
 
