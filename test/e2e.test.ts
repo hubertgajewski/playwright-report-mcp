@@ -85,10 +85,8 @@ describe.skipIf(SKIP)('MCP server e2e — fixture Playwright project', () => {
     it('returns all tests from the fixture project', async () => {
       const data = parseResult(await client.callTool({ name: 'list_tests', arguments: {} }));
       expect(data.count).toBeGreaterThanOrEqual(3);
-      expect(data.tests).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ title: expect.any(String), file: expect.any(String) }),
-        ])
+      expect(data.tests.map((t: { title: string }) => t.title)).toContain(
+        'deliberately fails with attachment'
       );
     });
 
@@ -109,8 +107,7 @@ describe.skipIf(SKIP)('MCP server e2e — fixture Playwright project', () => {
   // get_failed_tests and get_test_attachment have had a chance to read it.
 
   describe('after a full browser test run', () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let runData: any;
+    let runData: Record<string, unknown>;
 
     beforeAll(async () => {
       runData = parseResult(await client.callTool({ name: 'run_tests', arguments: {} }));
