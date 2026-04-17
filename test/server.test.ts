@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { server } from '../index.js';
+import { buildListTestsCmd, parseListJson, server } from '../index.js';
 
 let client: Client;
 
@@ -84,5 +84,221 @@ describe('run_tests — spec path validation', () => {
     expect(result.isError).toBe(true);
     const text = (result.content as TextContent[])[0].text;
     expect(text).toContain('within the project directory');
+  });
+});
+
+describe('parseListJson — tag extraction', () => {
+  it('returns each spec with @-prefixed tags', () => {
+    const input = JSON.stringify({
+      suites: [
+        {
+          title: 'nav.spec.ts',
+          file: 'tests/nav.spec.ts',
+          specs: [
+            {
+              title: 'home page loads',
+              file: 'tests/nav.spec.ts',
+              line: 6,
+              tags: ['smoke', 'regression'],
+              tests: [{ projectName: 'Chromium', results: [] }],
+            },
+          ],
+        },
+      ],
+    });
+    const tests = parseListJson(input);
+    expect(tests).toEqual([
+      {
+        title: 'home page loads',
+        file: 'tests/nav.spec.ts',
+        tags: ['@smoke', '@regression'],
+      },
+    ]);
+  });
+
+  it('deduplicates specs that appear once per project', () => {
+    const spec = (projectName: string) => ({
+      title: 'login succeeds',
+      file: 'tests/auth.spec.ts',
+      line: 5,
+      tags: ['smoke'],
+      tests: [{ projectName, results: [] }],
+    });
+    const input = JSON.stringify({
+      suites: [
+        {
+          title: 'auth.spec.ts',
+          file: 'tests/auth.spec.ts',
+          specs: [spec('Chromium'), spec('Firefox'), spec('Webkit')],
+        },
+      ],
+    });
+    const tests = parseListJson(input);
+    expect(tests).toHaveLength(1);
+    expect(tests[0].tags).toEqual(['@smoke']);
+  });
+
+  it('flattens tags from nested suites', () => {
+    const input = JSON.stringify({
+      suites: [
+        {
+          title: 'nav.spec.ts',
+          file: 'tests/nav.spec.ts',
+          specs: [],
+          suites: [
+            {
+              title: 'navigation',
+              specs: [
+                {
+                  title: 'menu opens',
+                  file: 'tests/nav.spec.ts',
+                  line: 20,
+                  tags: ['smoke'],
+                  tests: [{ projectName: 'Chromium', results: [] }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const tests = parseListJson(input);
+    expect(tests).toEqual([
+      { title: 'menu opens', file: 'tests/nav.spec.ts', tags: ['@smoke'] },
+    ]);
+  });
+
+  it('returns an empty tags array when a spec has no tags', () => {
+    const input = JSON.stringify({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 'untagged',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              tags: [],
+              tests: [{ projectName: 'Chromium', results: [] }],
+            },
+          ],
+        },
+      ],
+    });
+    const tests = parseListJson(input);
+    expect(tests).toEqual([{ title: 'untagged', file: 'tests/x.spec.ts', tags: [] }]);
+  });
+
+  it('ignores leading non-JSON stdout pollution', () => {
+    const json = JSON.stringify({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 't',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              tags: ['smoke'],
+              tests: [{ projectName: 'Chromium', results: [] }],
+            },
+          ],
+        },
+      ],
+    });
+    const polluted = `◇ injected env (0) from .env\n◇ tip { override: true }\n${json}`;
+    const tests = parseListJson(polluted);
+    expect(tests).toHaveLength(1);
+    expect(tests[0].tags).toEqual(['@smoke']);
+  });
+
+  it('throws when output contains no JSON object', () => {
+    expect(() => parseListJson('no json here')).toThrow();
+  });
+
+  it('throws when JSON is malformed', () => {
+    expect(() => parseListJson('{"suites": [')).toThrow();
+  });
+
+  it('ignores trailing warnings after the JSON body', () => {
+    const json = JSON.stringify({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 't',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              tags: ['smoke'],
+              tests: [{ projectName: 'Chromium', results: [] }],
+            },
+          ],
+        },
+      ],
+    });
+    const trailed = `${json}\n(node:123) DeprecationWarning: The something is deprecated\n`;
+    const tests = parseListJson(trailed);
+    expect(tests).toHaveLength(1);
+    expect(tests[0].tags).toEqual(['@smoke']);
+  });
+
+  it('handles braces inside string values', () => {
+    const json = JSON.stringify({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 'renders {placeholder} and "quoted" text',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              tags: ['smoke'],
+              tests: [{ projectName: 'Chromium', results: [] }],
+            },
+          ],
+        },
+      ],
+    });
+    const tests = parseListJson(json);
+    expect(tests).toEqual([
+      {
+        title: 'renders {placeholder} and "quoted" text',
+        file: 'tests/x.spec.ts',
+        tags: ['@smoke'],
+      },
+    ]);
+  });
+
+  it('throws when the opening brace has no matching close', () => {
+    expect(() => parseListJson('prefix\n{"suites": [1, 2')).toThrow(/unbalanced/i);
+  });
+});
+
+describe('buildListTestsCmd', () => {
+  it('requests the JSON reporter with --list', () => {
+    expect(buildListTestsCmd()).toEqual([
+      'npx',
+      'playwright',
+      'test',
+      '--list',
+      '--reporter=json',
+    ]);
+  });
+
+  it('appends --grep when a tag is provided', () => {
+    expect(buildListTestsCmd('@smoke')).toEqual([
+      'npx',
+      'playwright',
+      'test',
+      '--list',
+      '--reporter=json',
+      '--grep',
+      '@smoke',
+    ]);
   });
 });
