@@ -1,6 +1,10 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { unlinkSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { fileURLToPath } from 'url';
+import { stats, suites } from './fixtures/data.js';
 
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
@@ -14,6 +18,25 @@ import { spawnSync } from 'child_process';
 import { buildListTestsCmd, parseListJson, server } from '../index.js';
 
 const spawnSyncMock = spawnSync as unknown as ReturnType<typeof vi.fn>;
+
+const resultsDir = fileURLToPath(new URL('./fixtures/test-results', import.meta.url));
+const resultsFile = join(resultsDir, 'results.json');
+
+function writeDefaultReport() {
+  writeFileSync(resultsFile, JSON.stringify({ suites, stats }, null, 2));
+}
+
+function writeCustomReport(report: unknown) {
+  writeFileSync(resultsFile, JSON.stringify(report));
+}
+
+function deleteReport() {
+  try {
+    unlinkSync(resultsFile);
+  } catch {
+    // already gone
+  }
+}
 
 let client: Client;
 
@@ -332,6 +355,483 @@ describe('buildListTestsCmd', () => {
       '--reporter=json',
       '--grep',
       '@smoke',
+    ]);
+  });
+});
+
+describe('run_tests — spawn failure', () => {
+  beforeEach(() => spawnSyncMock.mockClear());
+
+  it('returns error when Playwright cannot be spawned', async () => {
+    spawnSyncMock.mockReturnValueOnce({
+      error: new Error('ENOENT'),
+      stdout: '',
+      stderr: '',
+    });
+    const result = await client.callTool({ name: 'run_tests', arguments: {} });
+    expect(result.isError).toBe(true);
+    const text = (result.content as TextContent[])[0].text;
+    expect(text).toContain('Failed to spawn Playwright');
+    expect(text).toContain('ENOENT');
+  });
+});
+
+describe('run_tests — missing results.json', () => {
+  beforeEach(() => deleteReport());
+  afterEach(() => writeDefaultReport());
+
+  it('returns error referencing stderr when the report file is absent', async () => {
+    spawnSyncMock.mockReturnValueOnce({
+      status: 1,
+      stdout: '',
+      stderr: 'reporter failed to write output',
+    });
+    const result = await client.callTool({ name: 'run_tests', arguments: {} });
+    expect(result.isError).toBe(true);
+    const text = (result.content as TextContent[])[0].text;
+    expect(text).toContain('results.json was not found');
+    expect(text).toContain('reporter failed to write output');
+  });
+});
+
+describe('run_tests — happy-path summarization', () => {
+  it('returns stats and per-test statuses sourced from the last results.json', async () => {
+    const data = parseResult(await client.callTool({ name: 'run_tests', arguments: {} }));
+    expect(data.stats).toEqual(stats);
+    expect(data.tests).toHaveLength(2);
+    const byTitle = Object.fromEntries(
+      data.tests.map((t: { title: string }) => [t.title, t])
+    );
+    expect(byTitle['login succeeds'].ok).toBe(true);
+    expect(byTitle['login succeeds'].results[0]).toMatchObject({
+      project: 'Chromium',
+      status: 'passed',
+      error: null,
+    });
+    expect(byTitle['login fails with wrong password'].ok).toBe(false);
+    expect(byTitle['login fails with wrong password'].results[0]).toMatchObject({
+      project: 'Chromium',
+      status: 'failed',
+    });
+    expect(byTitle['login fails with wrong password'].results[0].error).toContain('Login failed');
+  });
+});
+
+describe('get_failed_tests — missing report', () => {
+  beforeEach(() => deleteReport());
+  afterEach(() => writeDefaultReport());
+
+  it('returns error when results.json is missing', async () => {
+    const result = await client.callTool({ name: 'get_failed_tests', arguments: {} });
+    expect(result.isError).toBe(true);
+    expect((result.content as TextContent[])[0].text).toContain('No results.json');
+  });
+});
+
+describe('get_test_attachment — error gates', () => {
+  afterEach(() => writeDefaultReport());
+
+  it('returns error when results.json is missing', async () => {
+    deleteReport();
+    const result = await client.callTool({
+      name: 'get_test_attachment',
+      arguments: { testTitle: 'anything', attachmentName: 'anything' },
+    });
+    expect(result.isError).toBe(true);
+    expect((result.content as TextContent[])[0].text).toContain('No results.json');
+  });
+
+  it('rejects binary attachments with a descriptive error', async () => {
+    const binaryPath = join(resultsDir, 'screenshot.png');
+    writeFileSync(binaryPath, 'fake-png-bytes');
+    writeCustomReport({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 'binary test',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              ok: false,
+              tests: [
+                {
+                  projectName: 'Chromium',
+                  status: 'unexpected',
+                  results: [
+                    {
+                      status: 'failed',
+                      duration: 10,
+                      attachments: [
+                        { name: 'screenshot', contentType: 'image/png', path: binaryPath },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      stats: { expected: 0, unexpected: 1, skipped: 0, duration: 10 },
+    });
+
+    const result = await client.callTool({
+      name: 'get_test_attachment',
+      arguments: { testTitle: 'binary test', attachmentName: 'screenshot' },
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content as TextContent[])[0].text;
+    expect(text).toContain('binary');
+    expect(text).toContain('image/png');
+    unlinkSync(binaryPath);
+  });
+
+  it('rejects attachments larger than MAX_BYTES', async () => {
+    const bigPath = join(resultsDir, 'big.txt');
+    writeFileSync(bigPath, 'x'.repeat(1_000_001));
+    writeCustomReport({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 'big test',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              ok: false,
+              tests: [
+                {
+                  projectName: 'Chromium',
+                  status: 'unexpected',
+                  results: [
+                    {
+                      status: 'failed',
+                      duration: 10,
+                      attachments: [
+                        { name: 'diag', contentType: 'text/plain', path: bigPath },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      stats: { expected: 0, unexpected: 1, skipped: 0, duration: 10 },
+    });
+
+    const result = await client.callTool({
+      name: 'get_test_attachment',
+      arguments: { testTitle: 'big test', attachmentName: 'diag' },
+    });
+    expect(result.isError).toBe(true);
+    expect((result.content as TextContent[])[0].text).toContain('too large');
+    unlinkSync(bigPath);
+  });
+
+  it('falls through to "not found" when the attachment file is missing from disk', async () => {
+    writeCustomReport({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 'ghost test',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              ok: false,
+              tests: [
+                {
+                  projectName: 'Chromium',
+                  status: 'unexpected',
+                  results: [
+                    {
+                      status: 'failed',
+                      duration: 10,
+                      attachments: [
+                        {
+                          name: 'diag',
+                          contentType: 'text/plain',
+                          path: join(resultsDir, 'does-not-exist.txt'),
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      stats: { expected: 0, unexpected: 1, skipped: 0, duration: 10 },
+    });
+
+    const result = await client.callTool({
+      name: 'get_test_attachment',
+      arguments: { testTitle: 'ghost test', attachmentName: 'diag' },
+    });
+    expect(result.isError).toBe(true);
+    expect((result.content as TextContent[])[0].text).toContain('not found');
+  });
+});
+
+describe('run_tests — command construction', () => {
+  beforeEach(() => spawnSyncMock.mockClear());
+
+  it('passes spec, browser, and tag through to the Playwright command', async () => {
+    await client.callTool({
+      name: 'run_tests',
+      arguments: {
+        spec: 'tests/auth.spec.ts',
+        browser: 'Chromium',
+        tag: '@smoke',
+      },
+    });
+    const args = spawnSyncMock.mock.calls[0][1] as string[];
+    expect(args).toContain('--project');
+    expect(args).toContain('Chromium');
+    expect(args).toContain('--grep');
+    expect(args).toContain('@smoke');
+    expect(args.some((a) => a.endsWith('tests/auth.spec.ts'))).toBe(true);
+  });
+});
+
+describe('run_tests — edge cases in spawn result', () => {
+  afterEach(() => writeDefaultReport());
+
+  it('reports exitCode -1 when spawn result has no status field', async () => {
+    spawnSyncMock.mockReturnValueOnce({ stdout: '', stderr: '' });
+    const data = parseResult(await client.callTool({ name: 'run_tests', arguments: {} }));
+    expect(data.exitCode).toBe(-1);
+  });
+
+  it('reports unknown status and zero duration for tests with no result attempts', async () => {
+    writeCustomReport({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 'never ran',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              ok: true,
+              tests: [{ projectName: 'Chromium', status: 'expected', results: [] }],
+            },
+          ],
+        },
+      ],
+      stats: { expected: 1, unexpected: 0, skipped: 0, duration: 0 },
+    });
+    const data = parseResult(await client.callTool({ name: 'run_tests', arguments: {} }));
+    expect(data.tests[0].results[0]).toMatchObject({
+      project: 'Chromium',
+      status: 'unknown',
+      duration: 0,
+      error: null,
+    });
+  });
+
+  it('handles spawn result with no stderr field when the report is missing', async () => {
+    deleteReport();
+    spawnSyncMock.mockReturnValueOnce({ status: 1 });
+    const result = await client.callTool({ name: 'run_tests', arguments: {} });
+    expect(result.isError).toBe(true);
+    expect((result.content as TextContent[])[0].text).toMatch(/stderr:\s*$/);
+  });
+});
+
+describe('get_failed_tests — edge cases', () => {
+  afterEach(() => writeDefaultReport());
+
+  it('returns the failing spec with empty failures when its tests have no result attempts', async () => {
+    writeCustomReport({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 'empty results',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              ok: false,
+              tests: [{ projectName: 'Chromium', status: 'unexpected', results: [] }],
+            },
+          ],
+        },
+      ],
+      stats: { expected: 0, unexpected: 1, skipped: 0, duration: 0 },
+    });
+    const data = parseResult(await client.callTool({ name: 'get_failed_tests', arguments: {} }));
+    expect(data.failedCount).toBe(1);
+    expect(data.tests[0].failures).toEqual([]);
+  });
+});
+
+describe('get_test_attachment — skips entries without result attempts', () => {
+  afterEach(() => writeDefaultReport());
+
+  it('continues past tests whose results array is empty and returns not-found', async () => {
+    writeCustomReport({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 'mixed',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              ok: false,
+              tests: [
+                { projectName: 'Chromium', status: 'unexpected', results: [] },
+                {
+                  projectName: 'Firefox',
+                  status: 'unexpected',
+                  results: [{ status: 'failed', duration: 10, attachments: [] }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      stats: { expected: 0, unexpected: 1, skipped: 0, duration: 10 },
+    });
+    const result = await client.callTool({
+      name: 'get_test_attachment',
+      arguments: { testTitle: 'mixed', attachmentName: 'diag' },
+    });
+    expect(result.isError).toBe(true);
+    expect((result.content as TextContent[])[0].text).toContain('not found');
+  });
+});
+
+describe('list_tests — via MCP client', () => {
+  beforeEach(() => spawnSyncMock.mockClear());
+
+  it('returns tests parsed from the JSON reporter output', async () => {
+    const reporterJson = JSON.stringify({
+      suites: [
+        {
+          title: 'nav.spec.ts',
+          file: 'tests/nav.spec.ts',
+          specs: [
+            {
+              title: 'home loads',
+              file: 'tests/nav.spec.ts',
+              line: 3,
+              tags: ['smoke'],
+              tests: [{ projectName: 'Chromium', results: [] }],
+            },
+          ],
+        },
+      ],
+    });
+    spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: reporterJson, stderr: '' });
+
+    const data = parseResult(await client.callTool({ name: 'list_tests', arguments: {} }));
+    expect(data.count).toBe(1);
+    expect(data.tests[0]).toEqual({
+      title: 'home loads',
+      file: 'tests/nav.spec.ts',
+      tags: ['@smoke'],
+    });
+  });
+
+  it('passes --grep to Playwright when a tag filter is provided', async () => {
+    spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: '{"suites":[]}', stderr: '' });
+    await client.callTool({ name: 'list_tests', arguments: { tag: '@smoke' } });
+    const args = spawnSyncMock.mock.calls[0][1] as string[];
+    expect(args).toContain('--grep');
+    expect(args).toContain('@smoke');
+  });
+
+  it('returns error when Playwright cannot be spawned', async () => {
+    spawnSyncMock.mockReturnValueOnce({ error: new Error('ENOENT'), stdout: '', stderr: '' });
+    const result = await client.callTool({ name: 'list_tests', arguments: {} });
+    expect(result.isError).toBe(true);
+    expect((result.content as TextContent[])[0].text).toContain('Failed to spawn Playwright');
+  });
+
+  it('returns error when --list output cannot be parsed as JSON', async () => {
+    spawnSyncMock.mockReturnValueOnce({
+      status: 0,
+      stdout: 'no json here',
+      stderr: 'some warning',
+    });
+    const result = await client.callTool({ name: 'list_tests', arguments: {} });
+    expect(result.isError).toBe(true);
+    const text = (result.content as TextContent[])[0].text;
+    expect(text).toContain('Failed to parse');
+    expect(text).toContain('some warning');
+  });
+
+  it('tolerates spawn result with missing stdout/stderr fields', async () => {
+    spawnSyncMock.mockReturnValueOnce({});
+    const result = await client.callTool({ name: 'list_tests', arguments: {} });
+    expect(result.isError).toBe(true);
+    const text = (result.content as TextContent[])[0].text;
+    expect(text).toContain('Failed to parse');
+    expect(text).toMatch(/stderr:\s*$/);
+  });
+
+  it('returns zero tests when the reporter JSON has no suites field', async () => {
+    spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: '{}', stderr: '' });
+    const data = parseResult(await client.callTool({ name: 'list_tests', arguments: {} }));
+    expect(data).toEqual({ count: 0, tests: [] });
+  });
+});
+
+describe('parseListJson — tag normalization edge cases', () => {
+  it('preserves already @-prefixed tags without doubling', () => {
+    const input = JSON.stringify({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 'already prefixed',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              tags: ['@smoke'],
+              tests: [{ projectName: 'Chromium', results: [] }],
+            },
+          ],
+        },
+      ],
+    });
+    expect(parseListJson(input)).toEqual([
+      { title: 'already prefixed', file: 'tests/x.spec.ts', tags: ['@smoke'] },
+    ]);
+  });
+
+  it('defaults to an empty tags array when the tags field is missing', () => {
+    const input = JSON.stringify({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 'no tags field',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              tests: [{ projectName: 'Chromium', results: [] }],
+            },
+          ],
+        },
+      ],
+    });
+    expect(parseListJson(input)).toEqual([
+      { title: 'no tags field', file: 'tests/x.spec.ts', tags: [] },
     ]);
   });
 });
