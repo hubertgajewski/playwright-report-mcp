@@ -364,7 +364,7 @@ git push origin v1.0.5
 
 ## Contributing
 
-Bug reports and pull requests are welcome. Please open an issue first for significant changes.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for bug reports, pull requests, development setup, and commit conventions.
 
 ---
 
