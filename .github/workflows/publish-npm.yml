@@ -15,7 +15,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
 
@@ -51,9 +51,9 @@ jobs:
 
       - run: npm test
 
-      # TODO: migrate to npm Trusted Publishing (OIDC) — drop NODE_AUTH_TOKEN,
-      # pin Node to >= 22 so the npm CLI supports it, and configure the trusted
-      # publisher on npmjs.com. See https://docs.npmjs.com/trusted-publishers
+      # TODO: migrate to npm Trusted Publishing (OIDC) — drop NODE_AUTH_TOKEN
+      # once the trusted publisher is configured on npmjs.com against this repo
+      # and workflow. See https://docs.npmjs.com/trusted-publishers
       - run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

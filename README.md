@@ -3,7 +3,7 @@
 An MCP (Model Context Protocol) server for running Playwright tests and reading structured results, failed test details, and attachment content — designed for AI agents doing test failure analysis.
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
-![Node.js: 20+](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)
+![Node.js: 22+](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)
 
 ---
 
@@ -278,7 +278,7 @@ Use `PW_DIR` to point the server at any Playwright project directory. Register a
 
 ## Requirements
 
-- Node.js 20+
+- Node.js 22+
 - `@playwright/test` 1.40 or later
 - JSON reporter configured in your Playwright project
 
