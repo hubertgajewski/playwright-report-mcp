@@ -196,7 +196,9 @@ server.registerTool(
     const result = runPlaywright(cmd, effectiveTimeout);
 
     if (result.error) {
-      if ((result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT')
+      // Node's spawnSync({ timeout }) populates BOTH error.code='ETIMEDOUT' and signal='SIGTERM'
+      // when the timer fires, so this check must precede the generic spawn-failure branch.
+      if ('code' in result.error && result.error.code === 'ETIMEDOUT')
         return err(
           `Playwright test run exceeded the ${effectiveTimeout}ms timeout and was killed.`
         );
