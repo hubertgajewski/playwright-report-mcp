@@ -8,7 +8,9 @@ import { fileURLToPath } from 'url';
 import { z } from 'zod';
 
 const PW_DIR = resolve(process.env.PW_DIR ?? process.cwd());
-const RESULTS_FILE = resolve(process.env.PW_RESULTS_FILE ?? join(PW_DIR, 'test-results', 'results.json'));
+const RESULTS_FILE = resolve(
+  process.env.PW_RESULTS_FILE ?? join(PW_DIR, 'test-results', 'results.json')
+);
 
 // ---------- types (subset of Playwright JSON reporter output) ----------
 
