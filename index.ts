@@ -165,8 +165,9 @@ function err(message: string) {
 // Two candidates because the module runs in two layouts: source (`<repo>/index.ts` sibling to package.json)
 // and published (`<repo>/dist/index.js` one level below package.json). A hardcoded relative path would
 // silently break in one of them; `tsc` does not rewrite JSON specifiers.
-function loadPackageMeta(): { name: string; version: string } {
-  const here = dirname(fileURLToPath(import.meta.url));
+// `baseDir` is injectable so unit tests can exercise failure/fallback paths against a tmpdir.
+function loadPackageMeta(baseDir?: string): { name: string; version: string } {
+  const here = baseDir ?? dirname(fileURLToPath(import.meta.url));
   for (const candidate of [join(here, 'package.json'), join(here, '..', 'package.json')]) {
     try {
       const pkg = JSON.parse(readFileSync(candidate, 'utf8'));
@@ -364,7 +365,7 @@ server.registerTool(
   }
 );
 
-export { buildListTestsCmd, collectSpecs, parseListJson, server };
+export { buildListTestsCmd, collectSpecs, loadPackageMeta, parseListJson, server };
 
 if (realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const transport = new StdioServerTransport();
