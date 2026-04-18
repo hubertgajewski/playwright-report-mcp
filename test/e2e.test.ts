@@ -163,7 +163,7 @@ describe.skipIf(SKIP)('MCP server e2e — fixture Playwright project', () => {
         const data = parseResult(
           await client.callTool({
             name: 'run_tests',
-            arguments: { spec: 'tests/homepage.spec.ts', timeout: 120 },
+            arguments: { spec: 'tests/homepage.spec.ts', timeout: 120_000 },
           })
         );
         expect(typeof data.exitCode).toBe('number');

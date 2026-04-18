@@ -152,6 +152,15 @@ describe('run_tests — timeout', () => {
     const text = (result.content as TextContent[])[0].text;
     expect(text).toContain('exceeded the 1000ms timeout');
   });
+
+  // Canary: protects the `timeout !== undefined` half of the SIGTERM guard —
+  // without a caller-supplied timeout, SIGTERM must fall through to the normal report-read path.
+  it('does not treat SIGTERM as a timeout error when no timeout was specified', async () => {
+    spawnSyncMock.mockReturnValueOnce({ status: null, signal: 'SIGTERM', stdout: '', stderr: '' });
+    const data = parseResult(await client.callTool({ name: 'run_tests', arguments: {} }));
+    expect(data.exitCode).toBe(-1);
+    expect(data.stats).toEqual(stats);
+  });
 });
 
 describe('parseListJson — tag extraction', () => {
