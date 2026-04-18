@@ -943,6 +943,29 @@ describe('loadPackageMeta', () => {
     expect(loadPackageMeta(distDir)).toEqual({ name: 'parent', version: '6.0.0' });
   });
 
+  it('skips a candidate with an empty name and falls through', () => {
+    writeFileSync(firstPath(), JSON.stringify({ name: '', version: '7.0.0' }));
+    writeFileSync(parentPath(), JSON.stringify({ name: 'parent', version: '7.1.0' }));
+    expect(loadPackageMeta(distDir)).toEqual({ name: 'parent', version: '7.1.0' });
+  });
+
+  it('skips a candidate with an empty version and falls through', () => {
+    writeFileSync(firstPath(), JSON.stringify({ name: 'first', version: '' }));
+    writeFileSync(parentPath(), JSON.stringify({ name: 'parent', version: '8.0.0' }));
+    expect(loadPackageMeta(distDir)).toEqual({ name: 'parent', version: '8.0.0' });
+  });
+
+  it('skips a candidate with whitespace-only name/version and falls through', () => {
+    writeFileSync(firstPath(), JSON.stringify({ name: '   ', version: '\t\n' }));
+    writeFileSync(parentPath(), JSON.stringify({ name: 'parent', version: '9.0.0' }));
+    expect(loadPackageMeta(distDir)).toEqual({ name: 'parent', version: '9.0.0' });
+  });
+
+  it('throws when the only candidate has empty name/version', () => {
+    writeFileSync(firstPath(), JSON.stringify({ name: '', version: '' }));
+    expect(() => loadPackageMeta(distDir)).toThrow(/Could not locate package\.json/);
+  });
+
   it('throws when no candidate has valid metadata', () => {
     writeFileSync(firstPath(), 'garbage');
     writeFileSync(parentPath(), JSON.stringify({ name: 'parent' })); // missing version

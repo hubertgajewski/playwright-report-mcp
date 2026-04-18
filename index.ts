@@ -171,7 +171,14 @@ function loadPackageMeta(baseDir?: string): { name: string; version: string } {
   for (const candidate of [join(here, 'package.json'), join(here, '..', 'package.json')]) {
     try {
       const pkg = JSON.parse(readFileSync(candidate, 'utf8'));
-      if (typeof pkg.name === 'string' && typeof pkg.version === 'string')
+      // Reject empty/whitespace-only values — MCP clients would otherwise render a blank server
+      // identity, which defeats the whole point of sourcing these from package.json.
+      if (
+        typeof pkg.name === 'string' &&
+        pkg.name.trim().length > 0 &&
+        typeof pkg.version === 'string' &&
+        pkg.version.trim().length > 0
+      )
         return { name: pkg.name, version: pkg.version };
     } catch {
       // try next candidate
