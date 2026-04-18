@@ -219,9 +219,7 @@ describe('parseListJson — tag extraction', () => {
       ],
     });
     const tests = parseListJson(input);
-    expect(tests).toEqual([
-      { title: 'menu opens', file: 'tests/nav.spec.ts', tags: ['@smoke'] },
-    ]);
+    expect(tests).toEqual([{ title: 'menu opens', file: 'tests/nav.spec.ts', tags: ['@smoke'] }]);
   });
 
   it('returns an empty tags array when a spec has no tags', () => {
@@ -337,13 +335,7 @@ describe('parseListJson — tag extraction', () => {
 
 describe('buildListTestsCmd', () => {
   it('requests the JSON reporter with --list', () => {
-    expect(buildListTestsCmd()).toEqual([
-      'npx',
-      'playwright',
-      'test',
-      '--list',
-      '--reporter=json',
-    ]);
+    expect(buildListTestsCmd()).toEqual(['npx', 'playwright', 'test', '--list', '--reporter=json']);
   });
 
   it('appends --grep when a tag is provided', () => {
@@ -399,9 +391,7 @@ describe('run_tests — happy-path summarization', () => {
     const data = parseResult(await client.callTool({ name: 'run_tests', arguments: {} }));
     expect(data.stats).toEqual(stats);
     expect(data.tests).toHaveLength(2);
-    const byTitle = Object.fromEntries(
-      data.tests.map((t: { title: string }) => [t.title, t])
-    );
+    const byTitle = Object.fromEntries(data.tests.map((t: { title: string }) => [t.title, t]));
     expect(byTitle['login succeeds'].ok).toBe(true);
     expect(byTitle['login succeeds'].results[0]).toMatchObject({
       project: 'Chromium',
@@ -510,9 +500,7 @@ describe('get_test_attachment — error gates', () => {
                     {
                       status: 'failed',
                       duration: 10,
-                      attachments: [
-                        { name: 'diag', contentType: 'text/plain', path: bigPath },
-                      ],
+                      attachments: [{ name: 'diag', contentType: 'text/plain', path: bigPath }],
                     },
                   ],
                 },

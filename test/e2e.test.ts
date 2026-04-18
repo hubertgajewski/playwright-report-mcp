@@ -34,8 +34,7 @@ function chromiumInstalled(): boolean {
 }
 
 const skipReasons: string[] = [];
-if (!existsSync(DIST_INDEX))
-  skipReasons.push('server not built — run: npm run build');
+if (!existsSync(DIST_INDEX)) skipReasons.push('server not built — run: npm run build');
 if (!fixtureInstalled())
   skipReasons.push('fixture not installed — run: npm ci --prefix test/fixtures/pw-project');
 if (!chromiumInstalled())

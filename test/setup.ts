@@ -14,7 +14,4 @@ writeFileSync(attachmentPath, attachmentContent);
 const failedResult = suites[0].specs[1].tests[0].results[0];
 failedResult.attachments = [{ name: 'diagnosis', contentType: 'text/plain', path: attachmentPath }];
 
-writeFileSync(
-  join(resultsDir, 'results.json'),
-  JSON.stringify({ suites, stats }, null, 2)
-);
+writeFileSync(join(resultsDir, 'results.json'), JSON.stringify({ suites, stats }, null, 2));

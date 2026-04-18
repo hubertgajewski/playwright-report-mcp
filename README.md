@@ -35,14 +35,14 @@ An MCP (Model Context Protocol) server for running Playwright tests and reading 
 
 There are many Playwright MCP servers that control a browser — they navigate pages, click elements, fill forms, and take screenshots. Playwright Report MCP Server is not one of them.
 
-| | Browser automation MCPs | Playwright Report MCP Server |
-|---|---|---|
-| Examples | `microsoft/playwright-mcp`, `executeautomation/mcp-playwright` | this project |
-| Purpose | Let an AI agent drive a browser | Let an AI agent read test results |
-| Runs tests | No | Yes |
-| Returns pass/fail | No | Yes |
-| Surfaces error messages | No | Yes |
-| Reads attachment content | No | Yes |
+|                          | Browser automation MCPs                                        | Playwright Report MCP Server      |
+| ------------------------ | -------------------------------------------------------------- | --------------------------------- |
+| Examples                 | `microsoft/playwright-mcp`, `executeautomation/mcp-playwright` | this project                      |
+| Purpose                  | Let an AI agent drive a browser                                | Let an AI agent read test results |
+| Runs tests               | No                                                             | Yes                               |
+| Returns pass/fail        | No                                                             | Yes                               |
+| Surfaces error messages  | No                                                             | Yes                               |
+| Reads attachment content | No                                                             | Yes                               |
 
 ---
 
@@ -67,19 +67,20 @@ There are many Playwright MCP servers that control a browser — they navigate p
 
 > Approximate input token counts based on **Claude tokenization** (~3–4 characters per token for mixed JSON/text content).
 
-| What you need | Without MCP — approach | Tokens (no MCP) | With MCP — tool calls | Tokens (MCP) | Savings |
-|---|---|---|---|---|---|
-| Error message only — live run | `npx playwright test`, read stdout (`list`/`dot`) | ~500–1,200 | `run_tests` + `get_failed_tests` | ~300–500 | ~2× |
-| Error message only — existing results | Read full `results.json` | ~12,500–23,000 | `get_failed_tests` | ~300–500 | **~25–45×** |
-| + page state at failure | + read `error-context` file | ~15,000–26,000 | + `get_test_attachment('error-context')` | ~2,800–3,500 | **~4–7×** |
-| + custom text attachments¹ | + read attachment files | ~16,200–28,500 | + `get_test_attachment` ×2 | ~3,300–5,500 | **~4–5×** |
-| + full page HTML snapshot² | + read snapshot file | ~41,000–103,000 | + `get_test_attachment` | ~33,300–85,500 | ~1.2× |
+| What you need                         | Without MCP — approach                            | Tokens (no MCP) | With MCP — tool calls                    | Tokens (MCP)   | Savings     |
+| ------------------------------------- | ------------------------------------------------- | --------------- | ---------------------------------------- | -------------- | ----------- |
+| Error message only — live run         | `npx playwright test`, read stdout (`list`/`dot`) | ~500–1,200      | `run_tests` + `get_failed_tests`         | ~300–500       | ~2×         |
+| Error message only — existing results | Read full `results.json`                          | ~12,500–23,000  | `get_failed_tests`                       | ~300–500       | **~25–45×** |
+| + page state at failure               | + read `error-context` file                       | ~15,000–26,000  | + `get_test_attachment('error-context')` | ~2,800–3,500   | **~4–7×**   |
+| + custom text attachments¹            | + read attachment files                           | ~16,200–28,500  | + `get_test_attachment` ×2               | ~3,300–5,500   | **~4–5×**   |
+| + full page HTML snapshot²            | + read snapshot file                              | ~41,000–103,000 | + `get_test_attachment`                  | ~33,300–85,500 | ~1.2×       |
 
 > ¹ **Custom text attachments** — e.g. AI diagnosis (~500–2,000 tokens) and console logs (~200–500 tokens) added via `testInfo.attach()` in your own fixtures.
 >
 > ² **Full page HTML snapshot** — a custom fixture that attaches the full rendered page HTML on failure. Large pages alone can reach 30,000–80,000 tokens and dominate cost regardless of whether MCP is used.
 
 **Key observations:**
+
 - For a live run, stdout (`list`/`dot`) is compact but gives the agent no path to attachment content — dead end for deeper analysis
 - Reading `results.json` directly costs ~12,500–23,000 tokens even when only one test failed — most of it is passing test metadata the agent doesn't need
 - The biggest MCP gains are in the middle rows: getting error messages + page state from existing results at **~4–45× lower token cost**
@@ -159,11 +160,11 @@ Tested with **Claude Code (CLI)**. Should work with any MCP-compatible client th
 
 Runs the Playwright test suite and returns structured pass/fail results.
 
-| Input | Type | Description |
-|---|---|---|
-| `spec` | string (optional) | Spec file path relative to the project directory, e.g. `tests/login.spec.ts`. Must stay within the project directory. |
-| `browser` | enum (optional) | `Chromium`, `Firefox`, `Webkit`, `Mobile Chrome`, `Mobile Safari` |
-| `tag` | string (optional) | Tag filter, e.g. `@smoke` |
+| Input     | Type               | Description                                                                                                                     |
+| --------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `spec`    | string (optional)  | Spec file path relative to the project directory, e.g. `tests/login.spec.ts`. Must stay within the project directory.           |
+| `browser` | enum (optional)    | `Chromium`, `Firefox`, `Webkit`, `Mobile Chrome`, `Mobile Safari`                                                               |
+| `tag`     | string (optional)  | Tag filter, e.g. `@smoke`                                                                                                       |
 | `timeout` | integer (optional) | Timeout in seconds for the whole test run. Defaults to `300`. Use a larger value for long suites or a smaller one to fail fast. |
 
 Returns: exit code, run stats, and a summary of all tests with status, duration, and error per project.
@@ -178,9 +179,9 @@ Returns: failed test count, titles, file paths, per-project status, error messag
 
 Reads the content of a named text attachment for a specific test from the last run.
 
-| Input | Type | Description |
-|---|---|---|
-| `testTitle` | string | Exact test title as shown in the report |
+| Input            | Type   | Description                                                        |
+| ---------------- | ------ | ------------------------------------------------------------------ |
+| `testTitle`      | string | Exact test title as shown in the report                            |
 | `attachmentName` | string | Attachment name, e.g. `error-context`, `ai-diagnosis`, `page-html` |
 
 Returns: the attachment content as text. Binary attachments and files over 1 MB are rejected with an error.
@@ -189,8 +190,8 @@ Returns: the attachment content as text. Binary attachments and files over 1 MB 
 
 Lists all tests with their spec file and tags without running them.
 
-| Input | Type | Description |
-|---|---|---|
+| Input | Type              | Description                  |
+| ----- | ----------------- | ---------------------------- |
 | `tag` | string (optional) | Filter by tag, e.g. `@smoke` |
 
 ---
@@ -199,12 +200,12 @@ Lists all tests with their spec file and tags without running them.
 
 Playwright attaches files to failed tests automatically. `get_test_attachment` can read any text attachment by name.
 
-| Attachment name | Source | Present in every project |
-|---|---|---|
-| `error-context` | Playwright built-in — YAML accessibility tree snapshot at the point of failure | Yes |
-| `screenshot` | Playwright built-in — PNG screenshot (binary, not readable) | Yes |
-| `video` | Playwright built-in — WebM video (binary, not readable) | Yes |
-| Custom attachments | Added via `testInfo.attach()` in your fixtures | Depends on project |
+| Attachment name    | Source                                                                         | Present in every project |
+| ------------------ | ------------------------------------------------------------------------------ | ------------------------ |
+| `error-context`    | Playwright built-in — YAML accessibility tree snapshot at the point of failure | Yes                      |
+| `screenshot`       | Playwright built-in — PNG screenshot (binary, not readable)                    | Yes                      |
+| `video`            | Playwright built-in — WebM video (binary, not readable)                        | Yes                      |
+| Custom attachments | Added via `testInfo.attach()` in your fixtures                                 | Depends on project       |
 
 The `error-context` attachment is the most useful for projects without custom fixtures — it gives a semantic, structured view of the page at the moment of failure with no setup required.
 
@@ -243,10 +244,10 @@ Add to your `.mcp.json` at the root of your project:
 
 ### Environment variables
 
-| Variable | Default | Description |
-|---|---|---|
-| `PW_DIR` | `process.cwd()` | Root of the Playwright project — used as the working directory when running tests |
-| `PW_RESULTS_FILE` | `<PW_DIR>/test-results/results.json` | Absolute path to the JSON reporter output file |
+| Variable          | Default                              | Description                                                                       |
+| ----------------- | ------------------------------------ | --------------------------------------------------------------------------------- |
+| `PW_DIR`          | `process.cwd()`                      | Root of the Playwright project — used as the working directory when running tests |
+| `PW_RESULTS_FILE` | `<PW_DIR>/test-results/results.json` | Absolute path to the JSON reporter output file                                    |
 
 Set `PW_RESULTS_FILE` if your `playwright.config.ts` writes the report to a non-default location.
 
@@ -369,8 +370,8 @@ Releases are published to npm by [`.github/workflows/publish-npm.yml`](.github/w
 
 **Required repository secret:**
 
-| Name | How to create | Scope |
-|---|---|---|
+| Name        | How to create                                                                                            | Scope                                               |
+| ----------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
 | `NPM_TOKEN` | [npmjs.com → Access Tokens → Generate New Token → "Automation"](https://www.npmjs.com/settings/~/tokens) | Write access to the `playwright-report-mcp` package |
 
 **Recovery from a failed publish:** npm refuses to republish an existing version and restricts unpublishing after 72 hours. If a publish fails for any reason, bump to the next patch version in a new PR and cut a new release — do not try to re-run the failed release.
@@ -378,4 +379,3 @@ Releases are published to npm by [`.github/workflows/publish-npm.yml`](.github/w
 ## License
 
 [MIT](LICENSE) — Copyright (c) [Hubert Gajewski](https://hubertgajewski.com)
-
