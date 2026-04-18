@@ -192,12 +192,18 @@ server.registerTool(
     if (browser) cmd.push('--project', browser);
     if (tag) cmd.push('--grep', tag);
 
-    const result = runPlaywright(cmd, timeout ?? 300_000);
+    const effectiveTimeout = timeout ?? 300_000;
+    const result = runPlaywright(cmd, effectiveTimeout);
 
-    if (result.error) return err(`Failed to spawn Playwright: ${result.error.message}`);
-
-    if (timeout !== undefined && result.signal === 'SIGTERM')
-      return err(`Playwright test run exceeded the ${timeout}ms timeout and was killed.`);
+    if (result.error) {
+      // Node's spawnSync({ timeout }) populates BOTH error.code='ETIMEDOUT' and signal='SIGTERM'
+      // when the timer fires, so this check must precede the generic spawn-failure branch.
+      if ('code' in result.error && result.error.code === 'ETIMEDOUT')
+        return err(
+          `Playwright test run exceeded the ${effectiveTimeout}ms timeout and was killed.`
+        );
+      return err(`Failed to spawn Playwright: ${result.error.message}`);
+    }
 
     const report = readLastReport();
     if (!report)
@@ -312,9 +318,18 @@ server.registerTool(
     },
   },
   async ({ tag }) => {
-    const result = runPlaywright(buildListTestsCmd(tag), 30_000);
+    const listTimeout = 30_000;
+    const result = runPlaywright(buildListTestsCmd(tag), listTimeout);
 
-    if (result.error) return err(`Failed to spawn Playwright: ${result.error.message}`);
+    if (result.error) {
+      // Node's spawnSync({ timeout }) populates BOTH error.code='ETIMEDOUT' and signal='SIGTERM'
+      // when the timer fires, so this check must precede the generic spawn-failure branch.
+      if ('code' in result.error && result.error.code === 'ETIMEDOUT')
+        return err(
+          `Listing Playwright tests exceeded the ${listTimeout}ms timeout and was killed.`
+        );
+      return err(`Failed to spawn Playwright: ${result.error.message}`);
+    }
 
     const stdout = result.stdout ?? '';
     let tests: Array<{ title: string; file: string; tags: string[] }>;

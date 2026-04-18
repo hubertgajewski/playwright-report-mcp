@@ -142,8 +142,17 @@ describe('run_tests — timeout', () => {
     expect(result.isError).toBe(true);
   });
 
-  it('surfaces an explicit error when SIGTERM follows a caller-specified timeout', async () => {
-    spawnSyncMock.mockReturnValueOnce({ status: null, signal: 'SIGTERM', stdout: '', stderr: '' });
+  it('surfaces an explicit error when spawnSync times out under a caller-specified timeout', async () => {
+    // Node's spawnSync({ timeout }) populates BOTH error.code='ETIMEDOUT' and signal='SIGTERM'
+    // when the timer fires; the error branch runs first, so assert on that path.
+    const timeoutError = Object.assign(new Error('spawnSync npx ETIMEDOUT'), { code: 'ETIMEDOUT' });
+    spawnSyncMock.mockReturnValueOnce({
+      status: null,
+      signal: 'SIGTERM',
+      error: timeoutError,
+      stdout: '',
+      stderr: '',
+    });
     const result = await client.callTool({
       name: 'run_tests',
       arguments: { timeout: 1000 },
@@ -151,15 +160,22 @@ describe('run_tests — timeout', () => {
     expect(result.isError).toBe(true);
     const text = (result.content as TextContent[])[0].text;
     expect(text).toContain('exceeded the 1000ms timeout');
+    expect(text).not.toContain('Failed to spawn');
   });
 
-  // Canary: protects the `timeout !== undefined` half of the SIGTERM guard —
-  // without a caller-supplied timeout, SIGTERM must fall through to the normal report-read path.
-  it('does not treat SIGTERM as a timeout error when no timeout was specified', async () => {
-    spawnSyncMock.mockReturnValueOnce({ status: null, signal: 'SIGTERM', stdout: '', stderr: '' });
-    const data = parseResult(await client.callTool({ name: 'run_tests', arguments: {} }));
-    expect(data.exitCode).toBe(-1);
-    expect(data.stats).toEqual(stats);
+  it('reports the default 300000 ms in the timeout message when no timeout was specified', async () => {
+    const timeoutError = Object.assign(new Error('spawnSync npx ETIMEDOUT'), { code: 'ETIMEDOUT' });
+    spawnSyncMock.mockReturnValueOnce({
+      status: null,
+      signal: 'SIGTERM',
+      error: timeoutError,
+      stdout: '',
+      stderr: '',
+    });
+    const result = await client.callTool({ name: 'run_tests', arguments: {} });
+    expect(result.isError).toBe(true);
+    const text = (result.content as TextContent[])[0].text;
+    expect(text).toContain('exceeded the 300000ms timeout');
   });
 });
 
@@ -766,6 +782,22 @@ describe('list_tests — via MCP client', () => {
     const result = await client.callTool({ name: 'list_tests', arguments: {} });
     expect(result.isError).toBe(true);
     expect((result.content as TextContent[])[0].text).toContain('Failed to spawn Playwright');
+  });
+
+  it('surfaces an explicit error when spawnSync times out under the 30s list_tests cap', async () => {
+    const timeoutError = Object.assign(new Error('spawnSync npx ETIMEDOUT'), { code: 'ETIMEDOUT' });
+    spawnSyncMock.mockReturnValueOnce({
+      status: null,
+      signal: 'SIGTERM',
+      error: timeoutError,
+      stdout: '',
+      stderr: '',
+    });
+    const result = await client.callTool({ name: 'list_tests', arguments: {} });
+    expect(result.isError).toBe(true);
+    const text = (result.content as TextContent[])[0].text;
+    expect(text).toContain('exceeded the 30000ms timeout');
+    expect(text).not.toContain('Failed to spawn');
   });
 
   it('returns error when --list output cannot be parsed as JSON', async () => {
