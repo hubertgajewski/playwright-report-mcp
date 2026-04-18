@@ -122,6 +122,8 @@ describe('get_test_attachment', () => {
 });
 
 describe('run_tests — spec path validation', () => {
+  beforeEach(() => spawnSyncMock.mockClear());
+
   it('rejects spec paths outside the project directory', async () => {
     const result = await client.callTool({
       name: 'run_tests',
@@ -130,6 +132,20 @@ describe('run_tests — spec path validation', () => {
     expect(result.isError).toBe(true);
     const text = (result.content as TextContent[])[0].text;
     expect(text).toContain('within the project directory');
+  });
+
+  it('accepts an absolute spec path that resolves inside the project directory', async () => {
+    // Positive counterpart to the `..` rejection test: `resolve(PW_DIR, absPath)` returns
+    // absPath unchanged, so the validation must still accept it when it falls within PW_DIR.
+    const pwDir = process.env.PW_DIR as string;
+    const absInside = join(pwDir, 'tests', 'auth.spec.ts');
+    const result = await client.callTool({
+      name: 'run_tests',
+      arguments: { spec: absInside },
+    });
+    expect(result.isError).toBeFalsy();
+    const args = spawnSyncMock.mock.calls[0][1] as string[];
+    expect(args).toContain(absInside);
   });
 });
 
@@ -742,6 +758,69 @@ describe('get_failed_tests — edge cases', () => {
 
 describe('get_test_attachment — skips entries without result attempts', () => {
   afterEach(() => writeDefaultReport());
+
+  it('falls through from a missing-on-disk attachment to a later test entry with a readable file', async () => {
+    // The first project lists the attachment but its file is gone from disk; the loop must
+    // continue past the swallowed statSync error and return content from the second project.
+    const workingPath = join(resultsDir, 'works.txt');
+    writeFileSync(workingPath, 'readable payload');
+    writeCustomReport({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 'shared name',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              ok: false,
+              tests: [
+                {
+                  projectName: 'Chromium',
+                  status: 'unexpected',
+                  results: [
+                    {
+                      status: 'failed',
+                      duration: 10,
+                      attachments: [
+                        {
+                          name: 'diag',
+                          contentType: 'text/plain',
+                          path: join(resultsDir, 'missing.txt'),
+                        },
+                      ],
+                    },
+                  ],
+                },
+                {
+                  projectName: 'Firefox',
+                  status: 'unexpected',
+                  results: [
+                    {
+                      status: 'failed',
+                      duration: 10,
+                      attachments: [{ name: 'diag', contentType: 'text/plain', path: workingPath }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      stats: { expected: 0, unexpected: 1, skipped: 0, duration: 20 },
+    });
+
+    const data = parseResult(
+      await client.callTool({
+        name: 'get_test_attachment',
+        arguments: { testTitle: 'shared name', attachmentName: 'diag' },
+      })
+    );
+    expect(data.content).toBe('readable payload');
+    unlinkSync(workingPath);
+  });
 
   it('continues past tests whose results array is empty and returns not-found', async () => {
     writeCustomReport({
