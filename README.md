@@ -33,7 +33,7 @@ An MCP (Model Context Protocol) server for running Playwright tests and reading 
 
 ## What it is NOT
 
-There are many Playwright MCP servers that control a browser — they navigate pages, click elements, fill forms, and take screenshots. Playwright Report MCP is not one of them.
+There are many Playwright MCP servers that control a browser — they navigate pages, click elements, fill forms, and take screenshots. Playwright Report MCP is not one of those.
 
 |                          | Browser automation MCPs                                        | Playwright Report MCP             |
 | ------------------------ | -------------------------------------------------------------- | --------------------------------- |
