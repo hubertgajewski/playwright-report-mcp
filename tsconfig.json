@@ -8,6 +8,5 @@
     "strict": true,
     "types": ["node"]
   },
-  "include": ["index.ts"],
-  "exclude": ["test", "vitest.config.ts"]
+  "include": ["index.ts"]
 }
