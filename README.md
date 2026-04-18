@@ -1,4 +1,4 @@
-# Playwright Report MCP Server
+# Playwright Report MCP
 
 An MCP (Model Context Protocol) server for running Playwright tests and reading structured results, failed test details, and attachment content — designed for AI agents doing test failure analysis.
 
@@ -29,13 +29,13 @@ An MCP (Model Context Protocol) server for running Playwright tests and reading 
 
 ## What it is
 
-**Playwright Report MCP Server** gives an AI agent structured, token-efficient access to Playwright test outcomes. It runs your test suite, reads the JSON reporter output, and surfaces exactly what the agent needs: which tests failed, what the errors were, and the content of relevant attachments.
+**Playwright Report MCP** gives an AI agent structured, token-efficient access to Playwright test outcomes. It runs your test suite, reads the JSON reporter output, and surfaces exactly what the agent needs: which tests failed, what the errors were, and the content of relevant attachments.
 
 ## What it is NOT
 
-There are many Playwright MCP servers that control a browser — they navigate pages, click elements, fill forms, and take screenshots. Playwright Report MCP Server is not one of them.
+There are many Playwright MCP servers that control a browser — they navigate pages, click elements, fill forms, and take screenshots. Playwright Report MCP is not one of them.
 
-|                          | Browser automation MCPs                                        | Playwright Report MCP Server      |
+|                          | Browser automation MCPs                                        | Playwright Report MCP             |
 | ------------------------ | -------------------------------------------------------------- | --------------------------------- |
 | Examples                 | `microsoft/playwright-mcp`, `executeautomation/mcp-playwright` | this project                      |
 | Purpose                  | Let an AI agent drive a browser                                | Let an AI agent read test results |
@@ -56,7 +56,7 @@ There are many Playwright MCP servers that control a browser — they navigate p
 
 **Reading `results.json` directly** — Works, but a full JSON report for even a small test suite is 10,000–20,000 tokens. For a failing test, most of that is passing test metadata you don't need.
 
-### What Playwright Report MCP Server does instead
+### What Playwright Report MCP does instead
 
 - Filters `results.json` to only failed tests
 - Returns structured, typed JSON the agent can act on immediately
