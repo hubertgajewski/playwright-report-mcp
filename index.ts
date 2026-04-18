@@ -179,7 +179,7 @@ function loadPackageMeta(baseDir?: string): { name: string; version: string } {
         typeof pkg.version === 'string' &&
         pkg.version.trim().length > 0
       )
-        return { name: pkg.name, version: pkg.version };
+        return { name: pkg.name.trim(), version: pkg.version.trim() };
     } catch {
       // try next candidate
     }

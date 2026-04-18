@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { collectSpecs } from '../index.js';
 
+type SuiteArg = Parameters<typeof collectSpecs>[0][number];
+
 describe('collectSpecs', () => {
   it('returns empty array for empty suites', () => {
     expect(collectSpecs([])).toEqual([]);
@@ -70,9 +72,7 @@ describe('collectSpecs', () => {
   it('treats a missing specs field as empty', () => {
     // `specs: []` exercises the defined branch of `suite.specs ?? []`; this case exercises the fallback.
     const result = collectSpecs([
-      { title: 'no-specs-field', file: 'tests/x.spec.ts' } as unknown as Parameters<
-        typeof collectSpecs
-      >[0][number],
+      { title: 'no-specs-field', file: 'tests/x.spec.ts' } as unknown as SuiteArg,
     ]);
     expect(result).toEqual([]);
   });

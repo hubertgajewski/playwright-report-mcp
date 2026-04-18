@@ -764,62 +764,71 @@ describe('get_test_attachment — skips entries without result attempts', () => 
     // continue past the swallowed statSync error and return content from the second project.
     const workingPath = join(resultsDir, 'works.txt');
     writeFileSync(workingPath, 'readable payload');
-    writeCustomReport({
-      suites: [
-        {
-          title: 'x.spec.ts',
-          file: 'tests/x.spec.ts',
-          specs: [
-            {
-              title: 'shared name',
-              file: 'tests/x.spec.ts',
-              line: 1,
-              ok: false,
-              tests: [
-                {
-                  projectName: 'Chromium',
-                  status: 'unexpected',
-                  results: [
-                    {
-                      status: 'failed',
-                      duration: 10,
-                      attachments: [
-                        {
-                          name: 'diag',
-                          contentType: 'text/plain',
-                          path: join(resultsDir, 'missing.txt'),
-                        },
-                      ],
-                    },
-                  ],
-                },
-                {
-                  projectName: 'Firefox',
-                  status: 'unexpected',
-                  results: [
-                    {
-                      status: 'failed',
-                      duration: 10,
-                      attachments: [{ name: 'diag', contentType: 'text/plain', path: workingPath }],
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
-        },
-      ],
-      stats: { expected: 0, unexpected: 1, skipped: 0, duration: 20 },
-    });
+    try {
+      writeCustomReport({
+        suites: [
+          {
+            title: 'x.spec.ts',
+            file: 'tests/x.spec.ts',
+            specs: [
+              {
+                title: 'shared name',
+                file: 'tests/x.spec.ts',
+                line: 1,
+                ok: false,
+                tests: [
+                  {
+                    projectName: 'Chromium',
+                    status: 'unexpected',
+                    results: [
+                      {
+                        status: 'failed',
+                        duration: 10,
+                        attachments: [
+                          {
+                            name: 'diag',
+                            contentType: 'text/plain',
+                            path: join(resultsDir, 'missing.txt'),
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                  {
+                    projectName: 'Firefox',
+                    status: 'unexpected',
+                    results: [
+                      {
+                        status: 'failed',
+                        duration: 10,
+                        attachments: [
+                          { name: 'diag', contentType: 'text/plain', path: workingPath },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        stats: { expected: 0, unexpected: 1, skipped: 0, duration: 20 },
+      });
 
-    const data = parseResult(
-      await client.callTool({
-        name: 'get_test_attachment',
-        arguments: { testTitle: 'shared name', attachmentName: 'diag' },
-      })
-    );
-    expect(data.content).toBe('readable payload');
-    unlinkSync(workingPath);
+      const data = parseResult(
+        await client.callTool({
+          name: 'get_test_attachment',
+          arguments: { testTitle: 'shared name', attachmentName: 'diag' },
+        })
+      );
+      expect(data.content).toBe('readable payload');
+    } finally {
+      try {
+        unlinkSync(workingPath);
+      } catch {
+        // already gone
+      }
+    }
   });
 
   it('continues past tests whose results array is empty and returns not-found', async () => {
@@ -1068,6 +1077,11 @@ describe('loadPackageMeta', () => {
     writeFileSync(firstPath(), JSON.stringify({ name: '   ', version: '\t\n' }));
     writeFileSync(parentPath(), JSON.stringify({ name: 'parent', version: '9.0.0' }));
     expect(loadPackageMeta(distDir)).toEqual({ name: 'parent', version: '9.0.0' });
+  });
+
+  it('trims leading/trailing whitespace from accepted name and version', () => {
+    writeFileSync(firstPath(), JSON.stringify({ name: '  padded  ', version: '\t10.0.0\n' }));
+    expect(loadPackageMeta(distDir)).toEqual({ name: 'padded', version: '10.0.0' });
   });
 
   it('throws when the only candidate has empty name/version', () => {
