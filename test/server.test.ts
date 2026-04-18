@@ -4,6 +4,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
+import pkg from '../package.json' with { type: 'json' };
 import { stats, suites } from './fixtures/data.js';
 
 vi.mock('child_process', async (importOriginal) => {
@@ -58,6 +59,15 @@ function parseResult(result: Awaited<ReturnType<typeof client.callTool>>) {
   const text = (result.content as TextContent[])[0].text;
   return JSON.parse(text);
 }
+
+describe('server identity', () => {
+  // Covers the source-layout branch of loadPackageMeta (index.ts sibling to package.json).
+  // The dist-layout branch is covered by test/e2e.test.ts.
+  it('advertises name and version from package.json', () => {
+    const info = client.getServerVersion();
+    expect(info).toMatchObject({ name: pkg.name, version: pkg.version });
+  });
+});
 
 describe('get_failed_tests', () => {
   let data: ReturnType<typeof parseResult>;

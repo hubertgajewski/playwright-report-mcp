@@ -3,7 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { spawnSync } from 'child_process';
 import { readFileSync, realpathSync, statSync } from 'fs';
-import { join, relative, resolve } from 'path';
+import { dirname, join, relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { z } from 'zod';
 
@@ -161,7 +161,26 @@ function err(message: string) {
 
 // ---------- server ----------
 
-const server = new McpServer({ name: 'playwright-report', version: '1.0.0' });
+// Load identity from package.json so clients see the real published name/version via MCP `initialize`.
+// Two candidates because the module runs in two layouts: source (`<repo>/index.ts` sibling to package.json)
+// and published (`<repo>/dist/index.js` one level below package.json). A hardcoded relative path would
+// silently break in one of them; `tsc` does not rewrite JSON specifiers.
+function loadPackageMeta(): { name: string; version: string } {
+  const here = dirname(fileURLToPath(import.meta.url));
+  for (const candidate of [join(here, 'package.json'), join(here, '..', 'package.json')]) {
+    try {
+      const pkg = JSON.parse(readFileSync(candidate, 'utf8'));
+      if (typeof pkg.name === 'string' && typeof pkg.version === 'string')
+        return { name: pkg.name, version: pkg.version };
+    } catch {
+      // try next candidate
+    }
+  }
+  throw new Error(`Could not locate package.json relative to ${here}`);
+}
+
+const pkg = loadPackageMeta();
+const server = new McpServer({ name: pkg.name, version: pkg.version });
 
 server.registerTool(
   'run_tests',
