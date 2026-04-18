@@ -322,8 +322,12 @@ server.registerTool(
     const result = runPlaywright(buildListTestsCmd(tag), listTimeout);
 
     if (result.error) {
-      if ((result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT')
-        return err(`Playwright list_tests exceeded the ${listTimeout}ms timeout and was killed.`);
+      // Node's spawnSync({ timeout }) populates BOTH error.code='ETIMEDOUT' and signal='SIGTERM'
+      // when the timer fires, so this check must precede the generic spawn-failure branch.
+      if ('code' in result.error && result.error.code === 'ETIMEDOUT')
+        return err(
+          `Listing Playwright tests exceeded the ${listTimeout}ms timeout and was killed.`
+        );
       return err(`Failed to spawn Playwright: ${result.error.message}`);
     }
 
