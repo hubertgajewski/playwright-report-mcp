@@ -784,6 +784,22 @@ describe('list_tests — via MCP client', () => {
     expect((result.content as TextContent[])[0].text).toContain('Failed to spawn Playwright');
   });
 
+  it('surfaces an explicit error when spawnSync times out under the 30s list_tests cap', async () => {
+    const timeoutError = Object.assign(new Error('spawnSync npx ETIMEDOUT'), { code: 'ETIMEDOUT' });
+    spawnSyncMock.mockReturnValueOnce({
+      status: null,
+      signal: 'SIGTERM',
+      error: timeoutError,
+      stdout: '',
+      stderr: '',
+    });
+    const result = await client.callTool({ name: 'list_tests', arguments: {} });
+    expect(result.isError).toBe(true);
+    const text = (result.content as TextContent[])[0].text;
+    expect(text).toContain('exceeded the 30000ms timeout');
+    expect(text).not.toContain('Failed to spawn');
+  });
+
   it('returns error when --list output cannot be parsed as JSON', async () => {
     spawnSyncMock.mockReturnValueOnce({
       status: 0,

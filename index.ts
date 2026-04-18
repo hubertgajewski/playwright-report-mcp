@@ -318,9 +318,14 @@ server.registerTool(
     },
   },
   async ({ tag }) => {
-    const result = runPlaywright(buildListTestsCmd(tag), 30_000);
+    const listTimeout = 30_000;
+    const result = runPlaywright(buildListTestsCmd(tag), listTimeout);
 
-    if (result.error) return err(`Failed to spawn Playwright: ${result.error.message}`);
+    if (result.error) {
+      if ((result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT')
+        return err(`Playwright list_tests exceeded the ${listTimeout}ms timeout and was killed.`);
+      return err(`Failed to spawn Playwright: ${result.error.message}`);
+    }
 
     const stdout = result.stdout ?? '';
     let tests: Array<{ title: string; file: string; tags: string[] }>;
