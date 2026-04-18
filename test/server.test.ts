@@ -685,6 +685,36 @@ describe('run_tests — edge cases in spawn result', () => {
 describe('get_failed_tests — edge cases', () => {
   afterEach(() => writeDefaultReport());
 
+  it('returns null error when the failing result has no error object', async () => {
+    // Exercises the `?? null` fallback in the failure-to-error mapping.
+    writeCustomReport({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 'errorless failure',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              ok: false,
+              tests: [
+                {
+                  projectName: 'Chromium',
+                  status: 'unexpected',
+                  results: [{ status: 'failed', duration: 10, attachments: [] }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      stats: { expected: 0, unexpected: 1, skipped: 0, duration: 10 },
+    });
+    const data = parseResult(await client.callTool({ name: 'get_failed_tests', arguments: {} }));
+    expect(data.tests[0].failures[0].error).toBeNull();
+  });
+
   it('returns the failing spec with empty failures when its tests have no result attempts', async () => {
     writeCustomReport({
       suites: [

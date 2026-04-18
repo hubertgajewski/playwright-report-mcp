@@ -66,4 +66,14 @@ describe('collectSpecs', () => {
     const result = collectSpecs([{ title: 'empty', file: 'tests/empty.spec.ts', specs: [] }]);
     expect(result).toEqual([]);
   });
+
+  it('treats a missing specs field as empty', () => {
+    // `specs: []` exercises the defined branch of `suite.specs ?? []`; this case exercises the fallback.
+    const result = collectSpecs([
+      { title: 'no-specs-field', file: 'tests/x.spec.ts' } as unknown as Parameters<
+        typeof collectSpecs
+      >[0][number],
+    ]);
+    expect(result).toEqual([]);
+  });
 });
