@@ -4,6 +4,13 @@ on:
   push:
     tags: ['v*']
 
+# Serialize releases per tag. Don't cancel an in-progress run mid-publish:
+# the npm publish step is irreversible once it succeeds, so abandoning a
+# half-finished release would leave registries in an inconsistent state.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -21,6 +28,9 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
 
+      # Asserting tag == all three version fields transitively also asserts the
+      # three fields equal each other, so this subsumes the JSON-only sync check
+      # that previously lived in publish-npm.yml.
       - name: Verify tag matches version fields
         run: |
           tag_version="${GITHUB_REF_NAME#v}"
