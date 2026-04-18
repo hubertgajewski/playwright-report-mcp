@@ -76,9 +76,9 @@ jobs:
             --generate-notes \
             --verify-tag
 
-      # TODO: migrate to npm Trusted Publishing (OIDC) — drop NODE_AUTH_TOKEN
-      # once the trusted publisher is configured on npmjs.com against this repo
-      # and workflow. See https://docs.npmjs.com/trusted-publishers
+      # Auth via npm Trusted Publishing (OIDC). The `id-token: write` permission
+      # above lets npm exchange the GitHub OIDC token for a short-lived publish
+      # token — no NPM_TOKEN secret needed. Requires the trusted publisher to
+      # be configured on npmjs.com for this repo + workflow.
+      # https://docs.npmjs.com/trusted-publishers
       - run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
