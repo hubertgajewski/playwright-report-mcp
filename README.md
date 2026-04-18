@@ -328,15 +328,15 @@ Tests use [Vitest](https://vitest.dev/) and cover the `collectSpecs` helper (uni
 
 ## Cutting a release
 
-Releases are produced by pushing a `v*` tag. A GitHub Actions workflow (`.github/workflows/release.yml`) picks up the tag, verifies the version fields are in sync, and creates a GitHub Release with auto-generated notes categorized per `.github/release.yml` (Features / Bug fixes / Documentation / Dependencies / Other changes).
+Releases are produced by pushing a `v*` tag. [`.github/workflows/release.yml`](.github/workflows/release.yml) picks up the tag, verifies the tag matches all three version fields, runs `npm ci` + `npm run build` + `npm test`, creates a GitHub Release with auto-generated notes categorized per `.github/release.yml` (Features / Bug fixes / Documentation / Dependencies / Other changes), and publishes to npm. [`.github/workflows/publish-mcp.yml`](.github/workflows/publish-mcp.yml) then chains off `Release` via `workflow_run` and publishes `server.json` to the MCP registry. Merging to `main` does not trigger a publish.
 
-**Version lives in three places and all three must match before tagging:**
+**Version lives in three places and all three must match the tag before pushing it:**
 
 - `package.json` → `version`
 - `server.json` → top-level `version`
 - `server.json` → `packages[0].version`
 
-Bump all three in one PR and merge to `main` before cutting the release. The workflow refuses to create a release if the tag disagrees with any of these values.
+Bump all three in one PR and merge to `main` before cutting the release. `release.yml` fails the run if the tag disagrees with any of these values.
 
 **Ritual:**
 
@@ -345,9 +345,20 @@ Bump all three in one PR and merge to `main` before cutting the release. The wor
 git checkout main && git pull
 git tag v1.0.5
 git push origin v1.0.5
-# → .github/workflows/release.yml fires
-# → GitHub Release created with auto-generated, categorized notes
+# → release.yml fires: verifies tag, builds, tests, creates GitHub Release, publishes to npm
+# → publish-mcp.yml chains off Release and publishes server.json to the MCP registry
 ```
+
+**Flow:**
+
+1. Open a bump PR that updates all three version fields. Merge it to `main`.
+2. Tag the bump commit `v<version>` and push the tag.
+3. `release.yml` verifies tag/version alignment, runs `npm ci` + `npm run build` + `npm test`, creates the GitHub Release, then publishes to npm with `npm publish --access public --provenance`.
+4. `publish-mcp.yml` (triggered by `workflow_run` on `Release`) re-verifies the version fields, confirms the version is not already on the MCP registry, and publishes `server.json` to [registry.modelcontextprotocol.io](https://registry.modelcontextprotocol.io).
+
+**No repository secrets required.** Both npm and the MCP registry authenticate via GitHub OIDC ([npm trusted publishers](https://docs.npmjs.com/trusted-publishers)). The trusted publisher for npm is configured on npmjs.com under the package's **Publishing access** settings — no `NPM_TOKEN` secret exists or is needed.
+
+**Recovery from a failed publish:** npm refuses to republish an existing version and restricts unpublishing after 72 hours. If a publish fails for any reason, bump to the next patch version in a new PR and cut a new release — do not try to re-run the failed release.
 
 ---
 
@@ -356,25 +367,6 @@ git push origin v1.0.5
 Bug reports and pull requests are welcome. Please open an issue first for significant changes.
 
 ---
-
-## Release
-
-Releases are published to npm by [`.github/workflows/publish-npm.yml`](.github/workflows/publish-npm.yml) and to the MCP registry by [`.github/workflows/publish-mcp.yml`](.github/workflows/publish-mcp.yml) when a GitHub Release is marked **published**. Merging to `main` does not trigger a publish.
-
-**Flow:**
-
-1. Open a bump PR that updates all three version fields: `package.json.version`, `server.json.version`, and `server.json.packages[0].version`. Merge it to `main`.
-2. Draft a GitHub Release pointing at the bump commit (tag `v<version>`), then publish the release.
-3. `publish-npm.yml` reads the version from `package.json`, verifies the three version fields match, confirms the version is not already on npm, runs `npm run build` and `npm test`, then publishes with `npm publish --access public --provenance`.
-4. `publish-mcp.yml` chains off `publish-npm.yml` via `workflow_run`: once npm publish succeeds, it re-verifies the version fields, confirms the version is not already on the MCP registry, authenticates via GitHub OIDC, and publishes `server.json` to [registry.modelcontextprotocol.io](https://registry.modelcontextprotocol.io). No additional repository secret is required for MCP publishing — OIDC handles auth.
-
-**Required repository secret:**
-
-| Name        | How to create                                                                                            | Scope                                               |
-| ----------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| `NPM_TOKEN` | [npmjs.com → Access Tokens → Generate New Token → "Automation"](https://www.npmjs.com/settings/~/tokens) | Write access to the `playwright-report-mcp` package |
-
-**Recovery from a failed publish:** npm refuses to republish an existing version and restricts unpublishing after 72 hours. If a publish fails for any reason, bump to the next patch version in a new PR and cut a new release — do not try to re-run the failed release.
 
 ## License
 
