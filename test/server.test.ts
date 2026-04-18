@@ -125,14 +125,14 @@ describe('run_tests — spec path validation', () => {
 describe('run_tests — timeout', () => {
   beforeEach(() => spawnSyncMock.mockClear());
 
-  it('defaults to 300 seconds when timeout is omitted', async () => {
+  it('defaults to 300000 ms when timeout is omitted', async () => {
     await client.callTool({ name: 'run_tests', arguments: {} });
     expect(spawnSyncMock).toHaveBeenCalledTimes(1);
     expect(spawnSyncMock.mock.calls[0][2]).toMatchObject({ timeout: 300_000 });
   });
 
-  it('passes the custom timeout to spawnSync in milliseconds', async () => {
-    await client.callTool({ name: 'run_tests', arguments: { timeout: 60 } });
+  it('passes the custom timeout through to spawnSync verbatim (milliseconds)', async () => {
+    await client.callTool({ name: 'run_tests', arguments: { timeout: 60_000 } });
     expect(spawnSyncMock).toHaveBeenCalledTimes(1);
     expect(spawnSyncMock.mock.calls[0][2]).toMatchObject({ timeout: 60_000 });
   });
@@ -140,6 +140,17 @@ describe('run_tests — timeout', () => {
   it('rejects non-positive timeout values', async () => {
     const result = await client.callTool({ name: 'run_tests', arguments: { timeout: 0 } });
     expect(result.isError).toBe(true);
+  });
+
+  it('surfaces an explicit error when SIGTERM follows a caller-specified timeout', async () => {
+    spawnSyncMock.mockReturnValueOnce({ status: null, signal: 'SIGTERM', stdout: '', stderr: '' });
+    const result = await client.callTool({
+      name: 'run_tests',
+      arguments: { timeout: 1000 },
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content as TextContent[])[0].text;
+    expect(text).toContain('exceeded the 1000ms timeout');
   });
 });
 
