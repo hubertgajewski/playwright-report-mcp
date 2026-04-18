@@ -2,7 +2,7 @@ name: Publish to MCP registry
 
 on:
   workflow_run:
-    workflows: ['Publish to npm']
+    workflows: ['Release']
     types: [completed]
 
 permissions:
@@ -11,11 +11,11 @@ permissions:
 
 jobs:
   publish:
-    # Only run when the upstream npm-publish workflow succeeded AND was itself triggered
-    # by a release event — skips PR/push runs of the upstream workflow.
+    # Only run when the upstream Release workflow succeeded AND was itself triggered
+    # by a tag push — skips manual or branch-push runs of the upstream workflow.
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'release'
+      github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
     env:
       MCP_REGISTRY_SEARCH_URL: https://registry.modelcontextprotocol.io/v0.1/servers

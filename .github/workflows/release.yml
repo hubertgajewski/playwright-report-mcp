@@ -9,10 +9,17 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
 
       - name: Verify tag matches version fields
         run: |
@@ -33,6 +40,23 @@ jobs:
             exit 1
           fi
 
+      - run: npm ci
+
+      - name: Fail if version already published on npm
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          PUBLISHED=$(npm view "playwright-report-mcp@${VERSION}" version 2>/dev/null || true)
+          if [ -n "$PUBLISHED" ]; then
+            echo "Error: playwright-report-mcp@${VERSION} is already published on npm."
+            echo "Bump the version in package.json and both server.json entries, then cut a new release."
+            exit 1
+          fi
+          echo "Version ${VERSION} is not yet published — proceeding."
+
+      - run: npm run build
+
+      - run: npm test
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -41,3 +65,10 @@ jobs:
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
             --verify-tag
+
+      # TODO: migrate to npm Trusted Publishing (OIDC) — drop NODE_AUTH_TOKEN
+      # once the trusted publisher is configured on npmjs.com against this repo
+      # and workflow. See https://docs.npmjs.com/trusted-publishers
+      - run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
