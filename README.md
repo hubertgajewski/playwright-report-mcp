@@ -160,12 +160,12 @@ Tested with **Claude Code (CLI)**. Should work with any MCP-compatible client th
 
 Runs the Playwright test suite and returns structured pass/fail results.
 
-| Input     | Type               | Description                                                                                                                     |
-| --------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| `spec`    | string (optional)  | Spec file path relative to the project directory, e.g. `tests/login.spec.ts`. Must stay within the project directory.           |
-| `browser` | enum (optional)    | `Chromium`, `Firefox`, `Webkit`, `Mobile Chrome`, `Mobile Safari`                                                               |
-| `tag`     | string (optional)  | Tag filter, e.g. `@smoke`                                                                                                       |
-| `timeout` | integer (optional) | Timeout in seconds for the whole test run. Defaults to `300`. Use a larger value for long suites or a smaller one to fail fast. |
+| Input     | Type               | Description                                                                                                                                                                                                                                                     |
+| --------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spec`    | string (optional)  | Spec file path relative to the project directory, e.g. `tests/login.spec.ts`. Must stay within the project directory.                                                                                                                                           |
+| `browser` | enum (optional)    | `Chromium`, `Firefox`, `Webkit`, `Mobile Chrome`, `Mobile Safari`                                                                                                                                                                                               |
+| `tag`     | string (optional)  | Tag filter, e.g. `@smoke`                                                                                                                                                                                                                                       |
+| `timeout` | integer (optional) | Timeout in milliseconds for the whole test run. Defaults to `300000` (5 min). Use a larger value for long suites or a smaller one to fail fast. When the run is killed by this timeout, the tool returns an explicit error rather than a generic non-zero exit. |
 
 Returns: exit code, run stats, and a summary of all tests with status, duration, and error per project.
 
