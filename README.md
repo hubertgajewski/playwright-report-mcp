@@ -353,10 +353,10 @@ git push origin v1.0.5
 
 1. Open a bump PR that updates all three version fields. Merge it to `main`.
 2. Tag the bump commit `v<version>` and push the tag.
-3. `release.yml` verifies tag/version alignment, runs `npm ci` + `npm run build` + `npm test`, creates the GitHub Release, then publishes to npm with `npm publish --access public --provenance`.
+3. `release.yml` verifies tag/version alignment, runs `npm ci`, confirms the version is not already published on npm, runs `npm run build` + `npm test`, creates the GitHub Release, then publishes to npm with `npm publish --access public --provenance`.
 4. `publish-mcp.yml` (triggered by `workflow_run` on `Release`) re-verifies the version fields, confirms the version is not already on the MCP registry, and publishes `server.json` to [registry.modelcontextprotocol.io](https://registry.modelcontextprotocol.io).
 
-**No repository secrets required.** Both npm and the MCP registry authenticate via GitHub OIDC ([npm trusted publishers](https://docs.npmjs.com/trusted-publishers)). The trusted publisher for npm is configured on npmjs.com under the package's **Publishing access** settings — no `NPM_TOKEN` secret exists or is needed.
+**No repository secrets required.** Both npm and the MCP registry authenticate via GitHub OIDC ([npm trusted publishers](https://docs.npmjs.com/trusted-publishers)). The trusted publisher for npm is configured on npmjs.com under the package's **Settings → Publishing access → Trusted Publisher** section — no `NPM_TOKEN` secret exists or is needed.
 
 **Recovery from a failed publish:** npm refuses to republish an existing version and restricts unpublishing after 72 hours. If a publish fails for any reason, bump to the next patch version in a new PR and cut a new release — do not try to re-run the failed release.
 
