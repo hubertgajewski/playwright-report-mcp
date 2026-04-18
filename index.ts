@@ -3,7 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { spawnSync } from 'child_process';
 import { readFileSync, realpathSync, statSync } from 'fs';
-import { join, relative, resolve } from 'path';
+import { dirname, join, relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { z } from 'zod';
 
@@ -161,7 +161,34 @@ function err(message: string) {
 
 // ---------- server ----------
 
-const server = new McpServer({ name: 'playwright-report', version: '1.0.0' });
+// Load identity from package.json so clients see the real published name/version via MCP `initialize`.
+// Two candidates because the module runs in two layouts: source (`<repo>/index.ts` sibling to package.json)
+// and published (`<repo>/dist/index.js` one level below package.json). A hardcoded relative path would
+// silently break in one of them; `tsc` does not rewrite JSON specifiers.
+// `baseDir` is injectable so unit tests can exercise failure/fallback paths against a tmpdir.
+function loadPackageMeta(baseDir?: string): { name: string; version: string } {
+  const here = baseDir ?? dirname(fileURLToPath(import.meta.url));
+  for (const candidate of [join(here, 'package.json'), join(here, '..', 'package.json')]) {
+    try {
+      const pkg = JSON.parse(readFileSync(candidate, 'utf8'));
+      // Reject empty/whitespace-only values — MCP clients would otherwise render a blank server
+      // identity, which defeats the whole point of sourcing these from package.json.
+      if (
+        typeof pkg.name === 'string' &&
+        pkg.name.trim().length > 0 &&
+        typeof pkg.version === 'string' &&
+        pkg.version.trim().length > 0
+      )
+        return { name: pkg.name.trim(), version: pkg.version.trim() };
+    } catch {
+      // try next candidate
+    }
+  }
+  throw new Error(`Could not locate package.json relative to ${here}`);
+}
+
+const pkg = loadPackageMeta();
+const server = new McpServer({ name: pkg.name, version: pkg.version });
 
 server.registerTool(
   'run_tests',
@@ -345,7 +372,7 @@ server.registerTool(
   }
 );
 
-export { buildListTestsCmd, collectSpecs, parseListJson, server };
+export { buildListTestsCmd, collectSpecs, loadPackageMeta, parseListJson, server };
 
 if (realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const transport = new StdioServerTransport();

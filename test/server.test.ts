@@ -1,9 +1,11 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { unlinkSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
+import pkg from '../package.json' with { type: 'json' };
 import { stats, suites } from './fixtures/data.js';
 
 vi.mock('child_process', async (importOriginal) => {
@@ -15,7 +17,7 @@ vi.mock('child_process', async (importOriginal) => {
 });
 
 import { spawnSync } from 'child_process';
-import { buildListTestsCmd, parseListJson, server } from '../index.js';
+import { buildListTestsCmd, loadPackageMeta, parseListJson, server } from '../index.js';
 
 const spawnSyncMock = spawnSync as unknown as ReturnType<typeof vi.fn>;
 
@@ -58,6 +60,15 @@ function parseResult(result: Awaited<ReturnType<typeof client.callTool>>) {
   const text = (result.content as TextContent[])[0].text;
   return JSON.parse(text);
 }
+
+describe('server identity', () => {
+  // Covers the source-layout branch of loadPackageMeta (index.ts sibling to package.json).
+  // The dist-layout branch is covered by test/e2e.test.ts.
+  it('advertises name and version from package.json', () => {
+    const info = client.getServerVersion();
+    expect(info).toMatchObject({ name: pkg.name, version: pkg.version });
+  });
+});
 
 describe('get_failed_tests', () => {
   let data: ReturnType<typeof parseResult>;
@@ -111,6 +122,8 @@ describe('get_test_attachment', () => {
 });
 
 describe('run_tests — spec path validation', () => {
+  beforeEach(() => spawnSyncMock.mockClear());
+
   it('rejects spec paths outside the project directory', async () => {
     const result = await client.callTool({
       name: 'run_tests',
@@ -119,6 +132,20 @@ describe('run_tests — spec path validation', () => {
     expect(result.isError).toBe(true);
     const text = (result.content as TextContent[])[0].text;
     expect(text).toContain('within the project directory');
+  });
+
+  it('accepts an absolute spec path that resolves inside the project directory', async () => {
+    // Positive counterpart to the `..` rejection test: `resolve(PW_DIR, absPath)` returns
+    // absPath unchanged, so the validation must still accept it when it falls within PW_DIR.
+    const pwDir = process.env.PW_DIR as string;
+    const absInside = join(pwDir, 'tests', 'auth.spec.ts');
+    const result = await client.callTool({
+      name: 'run_tests',
+      arguments: { spec: absInside },
+    });
+    expect(result.isError).toBeFalsy();
+    const args = spawnSyncMock.mock.calls[0][1] as string[];
+    expect(args).toContain(absInside);
   });
 });
 
@@ -674,6 +701,36 @@ describe('run_tests — edge cases in spawn result', () => {
 describe('get_failed_tests — edge cases', () => {
   afterEach(() => writeDefaultReport());
 
+  it('returns null error when the failing result has no error object', async () => {
+    // Exercises the `?? null` fallback in the failure-to-error mapping.
+    writeCustomReport({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 'errorless failure',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              ok: false,
+              tests: [
+                {
+                  projectName: 'Chromium',
+                  status: 'unexpected',
+                  results: [{ status: 'failed', duration: 10, attachments: [] }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      stats: { expected: 0, unexpected: 1, skipped: 0, duration: 10 },
+    });
+    const data = parseResult(await client.callTool({ name: 'get_failed_tests', arguments: {} }));
+    expect(data.tests[0].failures[0].error).toBeNull();
+  });
+
   it('returns the failing spec with empty failures when its tests have no result attempts', async () => {
     writeCustomReport({
       suites: [
@@ -701,6 +758,78 @@ describe('get_failed_tests — edge cases', () => {
 
 describe('get_test_attachment — skips entries without result attempts', () => {
   afterEach(() => writeDefaultReport());
+
+  it('falls through from a missing-on-disk attachment to a later test entry with a readable file', async () => {
+    // The first project lists the attachment but its file is gone from disk; the loop must
+    // continue past the swallowed statSync error and return content from the second project.
+    const workingPath = join(resultsDir, 'works.txt');
+    writeFileSync(workingPath, 'readable payload');
+    try {
+      writeCustomReport({
+        suites: [
+          {
+            title: 'x.spec.ts',
+            file: 'tests/x.spec.ts',
+            specs: [
+              {
+                title: 'shared name',
+                file: 'tests/x.spec.ts',
+                line: 1,
+                ok: false,
+                tests: [
+                  {
+                    projectName: 'Chromium',
+                    status: 'unexpected',
+                    results: [
+                      {
+                        status: 'failed',
+                        duration: 10,
+                        attachments: [
+                          {
+                            name: 'diag',
+                            contentType: 'text/plain',
+                            path: join(resultsDir, 'missing.txt'),
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                  {
+                    projectName: 'Firefox',
+                    status: 'unexpected',
+                    results: [
+                      {
+                        status: 'failed',
+                        duration: 10,
+                        attachments: [
+                          { name: 'diag', contentType: 'text/plain', path: workingPath },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        stats: { expected: 0, unexpected: 1, skipped: 0, duration: 20 },
+      });
+
+      const data = parseResult(
+        await client.callTool({
+          name: 'get_test_attachment',
+          arguments: { testTitle: 'shared name', attachmentName: 'diag' },
+        })
+      );
+      expect(data.content).toBe('readable payload');
+    } finally {
+      try {
+        unlinkSync(workingPath);
+      } catch {
+        // already gone
+      }
+    }
+  });
 
   it('continues past tests whose results array is empty and returns not-found', async () => {
     writeCustomReport({
@@ -873,5 +1002,104 @@ describe('parseListJson — tag normalization edge cases', () => {
     expect(parseListJson(input)).toEqual([
       { title: 'no tags field', file: 'tests/x.spec.ts', tags: [] },
     ]);
+  });
+});
+
+describe('loadPackageMeta', () => {
+  // Layout under test: tmpRoot/
+  //                      ├── package.json      ← parent candidate
+  //                      └── dist/
+  //                          └── package.json  ← first candidate
+  // Tests drive loadPackageMeta(join(tmpRoot, 'dist')) to exercise both candidates.
+  let tmpRoot: string;
+  let distDir: string;
+  const firstPath = () => join(distDir, 'package.json');
+  const parentPath = () => join(tmpRoot, 'package.json');
+
+  beforeEach(() => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'pw-report-mcp-pkgmeta-'));
+    distDir = join(tmpRoot, 'dist');
+    mkdirSync(distDir);
+  });
+
+  afterEach(() => {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it('returns the first candidate when it has valid name/version', () => {
+    writeFileSync(firstPath(), JSON.stringify({ name: 'first', version: '1.0.0' }));
+    writeFileSync(parentPath(), JSON.stringify({ name: 'parent', version: '9.9.9' }));
+    expect(loadPackageMeta(distDir)).toEqual({ name: 'first', version: '1.0.0' });
+  });
+
+  it('falls through to the parent candidate when the first is missing', () => {
+    writeFileSync(parentPath(), JSON.stringify({ name: 'parent', version: '2.3.4' }));
+    expect(loadPackageMeta(distDir)).toEqual({ name: 'parent', version: '2.3.4' });
+  });
+
+  it('skips a candidate with malformed JSON and falls through', () => {
+    writeFileSync(firstPath(), 'not valid json {{{');
+    writeFileSync(parentPath(), JSON.stringify({ name: 'parent', version: '3.0.0' }));
+    expect(loadPackageMeta(distDir)).toEqual({ name: 'parent', version: '3.0.0' });
+  });
+
+  it('skips a candidate missing version and falls through', () => {
+    writeFileSync(firstPath(), JSON.stringify({ name: 'first' }));
+    writeFileSync(parentPath(), JSON.stringify({ name: 'parent', version: '4.0.0' }));
+    expect(loadPackageMeta(distDir)).toEqual({ name: 'parent', version: '4.0.0' });
+  });
+
+  it('skips a candidate missing name and falls through', () => {
+    writeFileSync(firstPath(), JSON.stringify({ version: '5.0.0' }));
+    writeFileSync(parentPath(), JSON.stringify({ name: 'parent', version: '5.0.1' }));
+    expect(loadPackageMeta(distDir)).toEqual({ name: 'parent', version: '5.0.1' });
+  });
+
+  it('skips a candidate where name/version are not strings and falls through', () => {
+    writeFileSync(firstPath(), JSON.stringify({ name: 'first', version: 1 }));
+    writeFileSync(parentPath(), JSON.stringify({ name: 'parent', version: '6.0.0' }));
+    expect(loadPackageMeta(distDir)).toEqual({ name: 'parent', version: '6.0.0' });
+  });
+
+  it('skips a candidate with an empty name and falls through', () => {
+    writeFileSync(firstPath(), JSON.stringify({ name: '', version: '7.0.0' }));
+    writeFileSync(parentPath(), JSON.stringify({ name: 'parent', version: '7.1.0' }));
+    expect(loadPackageMeta(distDir)).toEqual({ name: 'parent', version: '7.1.0' });
+  });
+
+  it('skips a candidate with an empty version and falls through', () => {
+    writeFileSync(firstPath(), JSON.stringify({ name: 'first', version: '' }));
+    writeFileSync(parentPath(), JSON.stringify({ name: 'parent', version: '8.0.0' }));
+    expect(loadPackageMeta(distDir)).toEqual({ name: 'parent', version: '8.0.0' });
+  });
+
+  it('skips a candidate with whitespace-only name/version and falls through', () => {
+    writeFileSync(firstPath(), JSON.stringify({ name: '   ', version: '\t\n' }));
+    writeFileSync(parentPath(), JSON.stringify({ name: 'parent', version: '9.0.0' }));
+    expect(loadPackageMeta(distDir)).toEqual({ name: 'parent', version: '9.0.0' });
+  });
+
+  it('trims leading/trailing whitespace from accepted name and version', () => {
+    writeFileSync(firstPath(), JSON.stringify({ name: '  padded  ', version: '\t10.0.0\n' }));
+    expect(loadPackageMeta(distDir)).toEqual({ name: 'padded', version: '10.0.0' });
+  });
+
+  it('throws when the only candidate has empty name/version', () => {
+    writeFileSync(firstPath(), JSON.stringify({ name: '', version: '' }));
+    expect(() => loadPackageMeta(distDir)).toThrow(/Could not locate package\.json/);
+  });
+
+  it('throws when no candidate has valid metadata', () => {
+    writeFileSync(firstPath(), 'garbage');
+    writeFileSync(parentPath(), JSON.stringify({ name: 'parent' })); // missing version
+    expect(() => loadPackageMeta(distDir)).toThrow(/Could not locate package\.json/);
+  });
+
+  it('throws when neither candidate exists on disk', () => {
+    expect(() => loadPackageMeta(distDir)).toThrow(/Could not locate package\.json/);
+  });
+
+  it('includes the baseDir in the thrown error message for diagnosability', () => {
+    expect(() => loadPackageMeta(distDir)).toThrow(new RegExp(distDir.replace(/\./g, '\\.')));
   });
 });

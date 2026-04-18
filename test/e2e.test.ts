@@ -14,6 +14,7 @@ import { existsSync, readdirSync } from 'fs';
 import { homedir } from 'os';
 import { join, resolve } from 'path';
 import { fileURLToPath } from 'url';
+import pkg from '../package.json' with { type: 'json' };
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PW_PROJECT = resolve(__dirname, 'fixtures/pw-project');
@@ -75,6 +76,17 @@ describe.skipIf(SKIP)('MCP server e2e — fixture Playwright project', () => {
 
   afterAll(async () => {
     await client?.close();
+  });
+
+  // ── server identity ───────────────────────────────────────────────────────
+  // Covers the dist-layout branch of loadPackageMeta (dist/index.js with package.json one level up).
+  // The source-layout branch is covered by test/server.test.ts.
+
+  describe('server identity', () => {
+    it('advertises name and version from package.json', () => {
+      const info = client.getServerVersion();
+      expect(info).toMatchObject({ name: pkg.name, version: pkg.version });
+    });
   });
 
   // ── list_tests ────────────────────────────────────────────────────────────
