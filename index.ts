@@ -192,12 +192,16 @@ server.registerTool(
     if (browser) cmd.push('--project', browser);
     if (tag) cmd.push('--grep', tag);
 
-    const result = runPlaywright(cmd, timeout ?? 300_000);
+    const effectiveTimeout = timeout ?? 300_000;
+    const result = runPlaywright(cmd, effectiveTimeout);
 
-    if (result.error) return err(`Failed to spawn Playwright: ${result.error.message}`);
-
-    if (timeout !== undefined && result.signal === 'SIGTERM')
-      return err(`Playwright test run exceeded the ${timeout}ms timeout and was killed.`);
+    if (result.error) {
+      if ((result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT')
+        return err(
+          `Playwright test run exceeded the ${effectiveTimeout}ms timeout and was killed.`
+        );
+      return err(`Failed to spawn Playwright: ${result.error.message}`);
+    }
 
     const report = readLastReport();
     if (!report)
