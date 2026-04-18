@@ -10,7 +10,7 @@ npm run build
 npm test
 ```
 
-Tests use [Vitest](https://vitest.dev/) and cover the `collectSpecs` helper (unit) and all four MCP tools via `InMemoryTransport` (integration). No build step or Playwright installation is required to run the test suite. See the [Development](README.md#development) section of the README for watch mode and more detail.
+The test suite runs without a build step or a Playwright installation. Use `npm run test:watch` for watch mode.
 
 ## Code style
 
@@ -23,4 +23,4 @@ There is no linter configured.
 - **Commit messages:** short, single-line, imperative mood. Prefix with the issue number when applicable: `#123 fix: short summary`.
 - **PR titles** follow the same format as commit messages.
 - **PR body** should include `Closes #N` so the issue is automatically linked and closed on merge.
-- **Tests for new behavior are expected.** The harness is Vitest under [`test/`](test/); the test file for server tools is [`test/server.test.ts`](test/server.test.ts).
+- **Tests for new behavior are expected.** The harness is [Vitest](https://vitest.dev/); existing suites live under [`test/`](test/).
