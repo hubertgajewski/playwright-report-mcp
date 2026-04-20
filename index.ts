@@ -2,7 +2,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { spawnSync } from 'child_process';
-import { existsSync, readFileSync, realpathSync, statSync } from 'fs';
+import { readFileSync, realpathSync, statSync } from 'fs';
 import { delimiter, dirname, isAbsolute, join, relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { z } from 'zod';
@@ -131,16 +131,13 @@ function resolveWorkingDir(
         `Set PW_ALLOWED_DIRS to authorize additional directories.`,
     };
   }
-  // Explicit existence + directory check so the error pinpoints the failed check.
-  // Otherwise Playwright spawns with a missing cwd and ENOENT bubbles up as a
-  // generic "Failed to spawn" — a silent fall-through the issue specifically calls out.
-  if (!existsSync(dir)) return { error: `workingDirectory "${dir}" does not exist.` };
-  try {
-    if (!statSync(dir).isDirectory())
-      return { error: `workingDirectory "${dir}" exists but is not a directory.` };
-  } catch (e) {
-    return { error: `workingDirectory "${dir}" could not be stat'd: ${(e as Error).message}` };
-  }
+  // Pinpoint the failed check in the error message — otherwise Playwright
+  // spawns with a missing cwd and ENOENT surfaces as a generic "Failed to
+  // spawn", the silent fall-through the issue explicitly forbids.
+  const st = statSync(dir, { throwIfNoEntry: false });
+  if (!st) return { error: `workingDirectory "${dir}" does not exist.` };
+  if (!st.isDirectory())
+    return { error: `workingDirectory "${dir}" exists but is not a directory.` };
   // Symlink-safe containment: canonicalize the resolved directory and re-check
   // against the canonicalized allowlist. This prevents a symlink inside an
   // authorized directory from escaping the allowlist — `spawnSync`'s cwd
@@ -533,9 +530,7 @@ server.registerTool(
 
 export {
   ALLOWED_DIRS,
-  ALLOWED_DIRS_REAL,
   buildListTestsCmd,
-  canonicalize,
   collectSpecs,
   formatStartupBanner,
   isInside,
