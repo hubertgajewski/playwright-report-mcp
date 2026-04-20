@@ -11,7 +11,12 @@ export default defineConfig({
       'test/fixtures/pw-project/**',
     ],
     env: {
-      PW_DIR: fileURLToPath(new URL('./test/fixtures', import.meta.url)),
+      // Default allowlist (unset → ".") authorizes only the repo root, which
+      // vitest uses as its cwd. Pin results.json to the fixture setup.ts writes
+      // so tools read it regardless of the per-call workingDirectory.
+      PW_RESULTS_FILE: fileURLToPath(
+        new URL('./test/fixtures/test-results/results.json', import.meta.url)
+      ),
     },
     coverage: {
       provider: 'v8',

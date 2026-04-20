@@ -17,7 +17,15 @@ vi.mock('child_process', async (importOriginal) => {
 });
 
 import { spawnSync } from 'child_process';
-import { buildListTestsCmd, loadPackageMeta, parseListJson, server } from '../index.js';
+import {
+  ALLOWED_DIRS,
+  buildListTestsCmd,
+  isInside,
+  loadPackageMeta,
+  parseAllowedDirs,
+  parseListJson,
+  server,
+} from '../index.js';
 
 const spawnSyncMock = spawnSync as unknown as ReturnType<typeof vi.fn>;
 
@@ -134,11 +142,10 @@ describe('run_tests — spec path validation', () => {
     expect(text).toContain('within the project directory');
   });
 
-  it('accepts an absolute spec path that resolves inside the project directory', async () => {
-    // Positive counterpart to the `..` rejection test: `resolve(PW_DIR, absPath)` returns
-    // absPath unchanged, so the validation must still accept it when it falls within PW_DIR.
-    const pwDir = process.env.PW_DIR as string;
-    const absInside = join(pwDir, 'tests', 'auth.spec.ts');
+  it('accepts an absolute spec path that resolves inside the working directory', async () => {
+    // Positive counterpart to the `..` rejection test: `resolve(wd, absPath)` returns
+    // absPath unchanged, so the validation must still accept it when it falls within wd.
+    const absInside = join(ALLOWED_DIRS[0], 'tests', 'auth.spec.ts');
     const result = await client.callTool({
       name: 'run_tests',
       arguments: { spec: absInside },
@@ -1101,5 +1108,243 @@ describe('loadPackageMeta', () => {
 
   it('includes the baseDir in the thrown error message for diagnosability', () => {
     expect(() => loadPackageMeta(distDir)).toThrow(new RegExp(distDir.replace(/\./g, '\\.')));
+  });
+});
+
+describe('isInside — segment-level containment', () => {
+  it('treats parent equal to child as contained', () => {
+    expect(isInside('/a/b', '/a/b')).toBe(true);
+  });
+
+  it('treats a strict descendant as contained', () => {
+    expect(isInside('/a/b', '/a/b/c')).toBe(true);
+    expect(isInside('/a/b', '/a/b/c/d')).toBe(true);
+  });
+
+  it('rejects a path above the parent', () => {
+    expect(isInside('/a/b', '/a')).toBe(false);
+  });
+
+  // Acceptance criterion: sibling-name bypass must be rejected. A raw
+  // String.prototype.startsWith('/a/b') would accept '/a/b-extra'.
+  it('rejects a sibling whose name shares a prefix with the parent', () => {
+    expect(isInside('/a/b', '/a/b-extra')).toBe(false);
+    expect(isInside('/Users/me/src/github/my-app', '/Users/me/src/github/my-app-evil')).toBe(false);
+  });
+
+  it('rejects a fully disjoint path', () => {
+    expect(isInside('/a/b', '/c/d')).toBe(false);
+  });
+});
+
+describe('parseAllowedDirs — startup resolution', () => {
+  it('defaults to a single "." entry when env is unset', () => {
+    expect(parseAllowedDirs(undefined, '/home/alice/proj')).toEqual(['/home/alice/proj']);
+  });
+
+  it('defaults to a single "." entry when env is the empty string', () => {
+    expect(parseAllowedDirs('', '/home/alice/proj')).toEqual(['/home/alice/proj']);
+  });
+
+  // Acceptance criterion: relative entries resolve against launchCwd so a
+  // committed .mcp.json works across contributors without baking absolute paths.
+  it('resolves relative entries against launchCwd — contributor A', () => {
+    expect(parseAllowedDirs('..', '/Users/alice/code/my-app')).toEqual(['/Users/alice/code']);
+  });
+
+  it('resolves relative entries against launchCwd — contributor B', () => {
+    expect(parseAllowedDirs('..', '/home/bob/src/my-app')).toEqual(['/home/bob/src']);
+  });
+
+  it('preserves absolute entries verbatim', () => {
+    expect(parseAllowedDirs('/etc', '/home/alice/proj')).toEqual(['/etc']);
+  });
+
+  it('splits multiple entries on path.delimiter', () => {
+    const sep = process.platform === 'win32' ? ';' : ':';
+    expect(parseAllowedDirs(`.${sep}..`, '/home/alice/proj')).toEqual([
+      '/home/alice/proj',
+      '/home/alice',
+    ]);
+  });
+});
+
+describe('workingDirectory — allowlist gate', () => {
+  beforeEach(() => spawnSyncMock.mockClear());
+
+  it('rejects workingDirectory outside the allowlist without spawning', async () => {
+    const result = await client.callTool({
+      name: 'run_tests',
+      arguments: { workingDirectory: '/etc' },
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content as TextContent[])[0].text;
+    expect(text).toContain('PW_ALLOWED_DIRS');
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+
+  // Acceptance criterion: sibling-name bypass at the tool boundary.
+  // The allowlist is the repo root; '<repo-root>-evil' shares a prefix but is
+  // a sibling, so it must be rejected exactly like a disjoint path.
+  it('rejects sibling-name bypass at the tool boundary', async () => {
+    const sibling = ALLOWED_DIRS[0] + '-evil';
+    const result = await client.callTool({
+      name: 'run_tests',
+      arguments: { workingDirectory: sibling },
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content as TextContent[])[0].text;
+    expect(text).toContain('PW_ALLOWED_DIRS');
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('passes a workingDirectory under the allowlist as the spawn cwd', async () => {
+    await client.callTool({
+      name: 'run_tests',
+      arguments: { workingDirectory: 'test/fixtures' },
+    });
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+    const options = spawnSyncMock.mock.calls[0][2] as { cwd: string };
+    expect(options.cwd.endsWith('test/fixtures')).toBe(true);
+  });
+
+  it('omitting workingDirectory defaults to launchCwd — spawn cwd matches ALLOWED_DIRS[0]', async () => {
+    await client.callTool({ name: 'run_tests', arguments: {} });
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+    const options = spawnSyncMock.mock.calls[0][2] as { cwd: string };
+    expect(options.cwd).toBe(ALLOWED_DIRS[0]);
+  });
+
+  it('gates list_tests on the allowlist', async () => {
+    const result = await client.callTool({
+      name: 'list_tests',
+      arguments: { workingDirectory: '/etc' },
+    });
+    expect(result.isError).toBe(true);
+    expect((result.content as TextContent[])[0].text).toContain('PW_ALLOWED_DIRS');
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('gates get_failed_tests on the allowlist', async () => {
+    const result = await client.callTool({
+      name: 'get_failed_tests',
+      arguments: { workingDirectory: '/etc' },
+    });
+    expect(result.isError).toBe(true);
+    expect((result.content as TextContent[])[0].text).toContain('PW_ALLOWED_DIRS');
+  });
+
+  it('gates get_test_attachment on the allowlist', async () => {
+    const result = await client.callTool({
+      name: 'get_test_attachment',
+      arguments: {
+        workingDirectory: '/etc',
+        testTitle: 'login fails with wrong password',
+        attachmentName: 'diagnosis',
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect((result.content as TextContent[])[0].text).toContain('PW_ALLOWED_DIRS');
+  });
+});
+
+describe('get_test_attachment — path-traversal defense', () => {
+  afterEach(() => writeDefaultReport());
+
+  // Acceptance criterion: attachment paths that escape workingDirectory must
+  // be rejected even if results.json records them. Craft a results.json whose
+  // attachment.path contains `..` components that escape the working dir.
+  it('rejects an attachment whose recorded path escapes workingDirectory via ..', async () => {
+    const escapingPath = join(resultsDir, '..', '..', '..', 'etc', 'passwd');
+    writeCustomReport({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 'traversal test',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              ok: false,
+              tests: [
+                {
+                  projectName: 'Chromium',
+                  status: 'unexpected',
+                  results: [
+                    {
+                      status: 'failed',
+                      duration: 10,
+                      attachments: [
+                        { name: 'diag', contentType: 'text/plain', path: escapingPath },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      stats: { expected: 0, unexpected: 1, skipped: 0, duration: 10 },
+    });
+
+    const result = await client.callTool({
+      name: 'get_test_attachment',
+      arguments: {
+        workingDirectory: 'test/fixtures',
+        testTitle: 'traversal test',
+        attachmentName: 'diag',
+      },
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content as TextContent[])[0].text;
+    expect(text).toContain('escapes workingDirectory');
+  });
+
+  it('rejects an absolute attachment path outside workingDirectory', async () => {
+    writeCustomReport({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 'absolute test',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              ok: false,
+              tests: [
+                {
+                  projectName: 'Chromium',
+                  status: 'unexpected',
+                  results: [
+                    {
+                      status: 'failed',
+                      duration: 10,
+                      attachments: [
+                        { name: 'diag', contentType: 'text/plain', path: '/etc/passwd' },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      stats: { expected: 0, unexpected: 1, skipped: 0, duration: 10 },
+    });
+
+    const result = await client.callTool({
+      name: 'get_test_attachment',
+      arguments: {
+        workingDirectory: 'test/fixtures',
+        testTitle: 'absolute test',
+        attachmentName: 'diag',
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect((result.content as TextContent[])[0].text).toContain('escapes workingDirectory');
   });
 });

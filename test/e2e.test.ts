@@ -63,11 +63,11 @@ describe.skipIf(SKIP)('MCP server e2e — fixture Playwright project', () => {
     for (const [k, v] of Object.entries(process.env)) {
       if (v !== undefined) env[k] = v;
     }
-    env.PW_DIR = PW_PROJECT;
-
+    // Launch the server with cwd = fixture project so default workingDirectory="." resolves there.
     const transport = new StdioClientTransport({
       command: 'node',
       args: [DIST_INDEX],
+      cwd: PW_PROJECT,
       env,
     });
     client = new Client({ name: 'e2e-client', version: '1.0.0' });

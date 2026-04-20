@@ -3,14 +3,34 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { spawnSync } from 'child_process';
 import { readFileSync, realpathSync, statSync } from 'fs';
-import { dirname, join, relative, resolve } from 'path';
+import { delimiter, dirname, isAbsolute, join, relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { z } from 'zod';
 
-const PW_DIR = resolve(process.env.PW_DIR ?? process.cwd());
-const RESULTS_FILE = resolve(
-  process.env.PW_RESULTS_FILE ?? join(PW_DIR, 'test-results', 'results.json')
-);
+// `launchCwd` is the working directory of the MCP server process at spawn
+// time. MCP stdio transports freeze the cwd for the process lifetime, so we
+// resolve it once here and use it as the anchor for per-call workingDirectory
+// resolution and for relative PW_ALLOWED_DIRS entries.
+const launchCwd = process.cwd();
+
+/**
+ * Parse PW_ALLOWED_DIRS into an array of absolute directory paths. Unset or
+ * empty collapses to a single "." entry (authorizing only launchCwd). Each
+ * entry is resolved against launchCwd exactly once at startup so relative
+ * entries in a committed .mcp.json encode layout, not per-user absolute paths.
+ */
+function parseAllowedDirs(raw: string | undefined, cwd: string): string[] {
+  const entries = raw === undefined || raw === '' ? ['.'] : raw.split(delimiter).filter(Boolean);
+  return entries.map((e) => resolve(cwd, e));
+}
+
+const ALLOWED_DIRS = parseAllowedDirs(process.env.PW_ALLOWED_DIRS, launchCwd);
+
+// Absolute override for results.json. If unset, the path is computed per-call
+// against the resolved workingDirectory.
+const RESULTS_FILE_OVERRIDE = process.env.PW_RESULTS_FILE
+  ? resolve(launchCwd, process.env.PW_RESULTS_FILE)
+  : null;
 
 // ---------- types (subset of Playwright JSON reporter output) ----------
 
@@ -61,9 +81,46 @@ interface PwReport {
 
 // ---------- helpers ----------
 
-function readLastReport(): PwReport | null {
+/**
+ * Segment-level containment check. Returns true when `child` equals `parent`
+ * or is a descendant of it. Rejects sibling-name bypasses (`/a/b` does not
+ * contain `/a/bextra`) by going through path.relative rather than a raw
+ * string-prefix match against `parent`.
+ */
+function isInside(parent: string, child: string): boolean {
+  if (child === parent) return true;
+  const rel = relative(parent, child);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+/**
+ * Resolve a caller-supplied workingDirectory against launchCwd and apply the
+ * allowlist check. Returns the absolute directory on success, or an error
+ * string pinpointing the failed check.
+ */
+function resolveWorkingDir(
+  workingDirectory: string | undefined
+): { dir: string } | { error: string } {
+  const dir = resolve(launchCwd, workingDirectory ?? '.');
+  const ok = ALLOWED_DIRS.some((entry) => isInside(entry, dir));
+  if (!ok) {
+    return {
+      error:
+        `workingDirectory "${dir}" is not under any entry in PW_ALLOWED_DIRS ` +
+        `(allowed: ${ALLOWED_DIRS.join(', ')}). ` +
+        `Set PW_ALLOWED_DIRS to authorize additional directories.`,
+    };
+  }
+  return { dir };
+}
+
+function resultsFileFor(dir: string): string {
+  return RESULTS_FILE_OVERRIDE ?? join(dir, 'test-results', 'results.json');
+}
+
+function readLastReport(dir: string): PwReport | null {
   try {
-    return JSON.parse(readFileSync(RESULTS_FILE, 'utf8')) as PwReport;
+    return JSON.parse(readFileSync(resultsFileFor(dir), 'utf8')) as PwReport;
   } catch {
     return null;
   }
@@ -84,9 +141,9 @@ function collectSpecs(suites: PwSuite[], filePath = ''): Array<{ spec: PwSpec; f
   return out;
 }
 
-function runPlaywright(cmd: string[], timeoutMs: number) {
+function runPlaywright(cmd: string[], cwd: string, timeoutMs: number) {
   return spawnSync(cmd[0], cmd.slice(1), {
-    cwd: PW_DIR,
+    cwd,
     encoding: 'utf8',
     timeout: timeoutMs,
     maxBuffer: 10 * 1024 * 1024,
@@ -190,11 +247,19 @@ function loadPackageMeta(baseDir?: string): { name: string; version: string } {
 const pkg = loadPackageMeta();
 const server = new McpServer({ name: pkg.name, version: pkg.version });
 
+const workingDirectoryField = z
+  .string()
+  .optional()
+  .describe(
+    'Playwright project directory. Absolute or relative to the MCP server launch directory. Defaults to ".". Must be under PW_ALLOWED_DIRS.'
+  );
+
 server.registerTool(
   'run_tests',
   {
     description: 'Run Playwright tests and return structured results.',
     inputSchema: {
+      workingDirectory: workingDirectoryField,
       spec: z.string().optional().describe('Spec file path, e.g. tests/navigation.spec.ts'),
       browser: z
         .enum(['Chromium', 'Firefox', 'Webkit', 'Mobile Chrome', 'Mobile Safari'])
@@ -208,19 +273,21 @@ server.registerTool(
         .describe('Timeout in milliseconds for the whole test run. Defaults to 300000.'),
     },
   },
-  async ({ spec, browser, tag, timeout }) => {
+  async ({ workingDirectory, spec, browser, tag, timeout }) => {
+    const wd = resolveWorkingDir(workingDirectory);
+    if ('error' in wd) return err(wd.error);
+
     const cmd = ['npx', 'playwright', 'test'];
     if (spec) {
-      const resolved = resolve(PW_DIR, spec);
-      if (relative(PW_DIR, resolved).startsWith('..'))
-        return err('spec path must be within the project directory');
+      const resolved = resolve(wd.dir, spec);
+      if (!isInside(wd.dir, resolved)) return err('spec path must be within the project directory');
       cmd.push(resolved);
     }
     if (browser) cmd.push('--project', browser);
     if (tag) cmd.push('--grep', tag);
 
     const effectiveTimeout = timeout ?? 300_000;
-    const result = runPlaywright(cmd, effectiveTimeout);
+    const result = runPlaywright(cmd, wd.dir, effectiveTimeout);
 
     if (result.error) {
       // Node's spawnSync({ timeout }) populates BOTH error.code='ETIMEDOUT' and signal='SIGTERM'
@@ -232,7 +299,7 @@ server.registerTool(
       return err(`Failed to spawn Playwright: ${result.error.message}`);
     }
 
-    const report = readLastReport();
+    const report = readLastReport(wd.dir);
     if (!report)
       return err(
         `Test run completed but results.json was not found.\nstderr: ${result.stderr ?? ''}`
@@ -263,10 +330,15 @@ server.registerTool(
   'get_failed_tests',
   {
     description: 'Return failed tests from the last run with error messages and attachment paths.',
-    inputSchema: {},
+    inputSchema: {
+      workingDirectory: workingDirectoryField,
+    },
   },
-  async () => {
-    const report = readLastReport();
+  async ({ workingDirectory }) => {
+    const wd = resolveWorkingDir(workingDirectory);
+    if ('error' in wd) return err(wd.error);
+
+    const report = readLastReport(wd.dir);
     if (!report) return err('No results.json found — run tests first.');
 
     const failed = collectSpecs(report.suites)
@@ -299,12 +371,16 @@ server.registerTool(
   {
     description: 'Read the content of a named attachment for a specific test from the last run.',
     inputSchema: {
+      workingDirectory: workingDirectoryField,
       testTitle: z.string().describe('Exact test title as shown in the report'),
       attachmentName: z.string().describe('Attachment name, e.g. "AI diagnosis", "DOM"'),
     },
   },
-  async ({ testTitle, attachmentName }) => {
-    const report = readLastReport();
+  async ({ workingDirectory, testTitle, attachmentName }) => {
+    const wd = resolveWorkingDir(workingDirectory);
+    if ('error' in wd) return err(wd.error);
+
+    const report = readLastReport(wd.dir);
     if (!report) return err('No results.json found — run tests first.');
 
     const match = collectSpecs(report.suites).find(({ spec }) => spec.title === testTitle);
@@ -315,18 +391,25 @@ server.registerTool(
       if (!result) continue;
       const attachment = result.attachments.find((a) => a.name === attachmentName);
       if (attachment?.path) {
+        // Defense-in-depth: refuse to read any attachment whose path escapes
+        // the resolved workingDirectory, even if results.json recorded one.
+        const attachmentPath = resolve(wd.dir, attachment.path);
+        if (!isInside(wd.dir, attachmentPath))
+          return err(
+            `Attachment "${attachmentName}" path "${attachment.path}" escapes workingDirectory "${wd.dir}".`
+          );
         if (!attachment.contentType.startsWith('text/'))
           return err(
             `Attachment "${attachmentName}" is binary (${attachment.contentType}) and cannot be returned as text.`
           );
         try {
           const MAX_BYTES = 1_000_000;
-          const { size } = statSync(attachment.path);
+          const { size } = statSync(attachmentPath);
           if (size > MAX_BYTES)
             return err(
               `Attachment "${attachmentName}" is too large to return inline (${size} bytes).`
             );
-          return ok({ testTitle, attachmentName, content: readFileSync(attachment.path, 'utf8') });
+          return ok({ testTitle, attachmentName, content: readFileSync(attachmentPath, 'utf8') });
         } catch {
           // attachment path recorded in results.json but file no longer on disk
         }
@@ -341,12 +424,16 @@ server.registerTool(
   {
     description: 'List all tests with their spec file and tags without running them.',
     inputSchema: {
+      workingDirectory: workingDirectoryField,
       tag: z.string().optional().describe('Filter by tag, e.g. @smoke'),
     },
   },
-  async ({ tag }) => {
+  async ({ workingDirectory, tag }) => {
+    const wd = resolveWorkingDir(workingDirectory);
+    if ('error' in wd) return err(wd.error);
+
     const listTimeout = 30_000;
-    const result = runPlaywright(buildListTestsCmd(tag), listTimeout);
+    const result = runPlaywright(buildListTestsCmd(tag), wd.dir, listTimeout);
 
     if (result.error) {
       // Node's spawnSync({ timeout }) populates BOTH error.code='ETIMEDOUT' and signal='SIGTERM'
@@ -372,9 +459,26 @@ server.registerTool(
   }
 );
 
-export { buildListTestsCmd, collectSpecs, loadPackageMeta, parseListJson, server };
+export {
+  ALLOWED_DIRS,
+  buildListTestsCmd,
+  collectSpecs,
+  isInside,
+  loadPackageMeta,
+  parseAllowedDirs,
+  parseListJson,
+  server,
+};
 
 if (realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  process.stderr.write(
+    `[playwright-report-mcp] launchCwd=${launchCwd}\n` +
+      `[playwright-report-mcp] PW_ALLOWED_DIRS=${ALLOWED_DIRS.join(', ')}` +
+      (process.env.PW_ALLOWED_DIRS === undefined || process.env.PW_ALLOWED_DIRS === ''
+        ? ' (default — authorizing only launchCwd)'
+        : '') +
+      '\n'
+  );
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
