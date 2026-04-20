@@ -2,7 +2,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { spawnSync } from 'child_process';
-import { readFileSync, realpathSync, statSync } from 'fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'fs';
 import { delimiter, dirname, isAbsolute, join, relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { z } from 'zod';
@@ -24,7 +24,27 @@ function parseAllowedDirs(raw: string | undefined, cwd: string): string[] {
   return entries.map((e) => resolve(cwd, e));
 }
 
+/**
+ * Canonicalize a path via realpathSync, falling back to the lexical input when
+ * the path does not yet exist. Used to close symlink bypasses of the
+ * allowlist and attachment-path checks: lexical containment alone is
+ * insufficient because `spawnSync`'s `cwd` and `readFileSync` both follow
+ * symlinks, so a symlink inside an authorized directory can otherwise escape
+ * the allowlist.
+ */
+function canonicalize(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
 const ALLOWED_DIRS = parseAllowedDirs(process.env.PW_ALLOWED_DIRS, launchCwd);
+// Canonicalized allowlist entries, computed once at startup. A non-existent
+// entry falls back to the lexical path — that entry simply never matches a
+// real resolved path until the directory exists.
+const ALLOWED_DIRS_REAL = ALLOWED_DIRS.map(canonicalize);
 
 // Absolute override for results.json. If unset, the path is computed per-call
 // against the resolved workingDirectory.
@@ -102,8 +122,8 @@ function resolveWorkingDir(
   workingDirectory: string | undefined
 ): { dir: string } | { error: string } {
   const dir = resolve(launchCwd, workingDirectory ?? '.');
-  const ok = ALLOWED_DIRS.some((entry) => isInside(entry, dir));
-  if (!ok) {
+  const lexicallyOk = ALLOWED_DIRS.some((entry) => isInside(entry, dir));
+  if (!lexicallyOk) {
     return {
       error:
         `workingDirectory "${dir}" is not under any entry in PW_ALLOWED_DIRS ` +
@@ -111,7 +131,45 @@ function resolveWorkingDir(
         `Set PW_ALLOWED_DIRS to authorize additional directories.`,
     };
   }
-  return { dir };
+  // Explicit existence + directory check so the error pinpoints the failed check.
+  // Otherwise Playwright spawns with a missing cwd and ENOENT bubbles up as a
+  // generic "Failed to spawn" — a silent fall-through the issue specifically calls out.
+  if (!existsSync(dir)) return { error: `workingDirectory "${dir}" does not exist.` };
+  try {
+    if (!statSync(dir).isDirectory())
+      return { error: `workingDirectory "${dir}" exists but is not a directory.` };
+  } catch (e) {
+    return { error: `workingDirectory "${dir}" could not be stat'd: ${(e as Error).message}` };
+  }
+  // Symlink-safe containment: canonicalize the resolved directory and re-check
+  // against the canonicalized allowlist. This prevents a symlink inside an
+  // authorized directory from escaping the allowlist — `spawnSync`'s cwd
+  // follows symlinks at the OS level, so the lexical check alone is bypassable
+  // by anyone able to create a symlink under an authorized path.
+  const realDir = realpathSync(dir);
+  const reallyOk = ALLOWED_DIRS_REAL.some((entry) => isInside(entry, realDir));
+  if (!reallyOk) {
+    return {
+      error:
+        `workingDirectory "${dir}" resolves via symlink to "${realDir}", which is not under any ` +
+        `entry in PW_ALLOWED_DIRS (allowed: ${ALLOWED_DIRS_REAL.join(', ')}).`,
+    };
+  }
+  return { dir: realDir };
+}
+
+/**
+ * Format the one-line startup banner written to stderr when the server runs as
+ * a CLI. Extracted from the inline `process.stderr.write(...)` so operators'
+ * assumptions about what appears in their logs are covered by unit tests.
+ */
+function formatStartupBanner(cwd: string, allowed: string[], rawEnv: string | undefined): string {
+  const isDefault = rawEnv === undefined || rawEnv === '';
+  const suffix = isDefault ? ' (default — authorizing only launchCwd)' : '';
+  return (
+    `[playwright-report-mcp] launchCwd=${cwd}\n` +
+    `[playwright-report-mcp] PW_ALLOWED_DIRS=${allowed.join(', ')}${suffix}\n`
+  );
 }
 
 function resultsFileFor(dir: string): string {
@@ -393,6 +451,10 @@ server.registerTool(
       if (attachment?.path) {
         // Defense-in-depth: refuse to read any attachment whose path escapes
         // the resolved workingDirectory, even if results.json recorded one.
+        // Two checks — lexical first (fast, catches `..` traversal and absolute
+        // paths outside wd.dir), then symlink-safe via realpathSync so a
+        // symlink inside wd.dir pointing at /etc/passwd or ~/.ssh/id_rsa
+        // cannot smuggle data out through readFileSync (which follows symlinks).
         const attachmentPath = resolve(wd.dir, attachment.path);
         if (!isInside(wd.dir, attachmentPath))
           return err(
@@ -403,15 +465,25 @@ server.registerTool(
             `Attachment "${attachmentName}" is binary (${attachment.contentType}) and cannot be returned as text.`
           );
         try {
+          const realAttachmentPath = realpathSync(attachmentPath);
+          if (!isInside(wd.dir, realAttachmentPath))
+            return err(
+              `Attachment "${attachmentName}" path "${attachment.path}" resolves via symlink to "${realAttachmentPath}", which escapes workingDirectory "${wd.dir}".`
+            );
           const MAX_BYTES = 1_000_000;
-          const { size } = statSync(attachmentPath);
+          const { size } = statSync(realAttachmentPath);
           if (size > MAX_BYTES)
             return err(
               `Attachment "${attachmentName}" is too large to return inline (${size} bytes).`
             );
-          return ok({ testTitle, attachmentName, content: readFileSync(attachmentPath, 'utf8') });
+          return ok({
+            testTitle,
+            attachmentName,
+            content: readFileSync(realAttachmentPath, 'utf8'),
+          });
         } catch {
-          // attachment path recorded in results.json but file no longer on disk
+          // realpathSync / statSync / readFileSync throw if the file no longer
+          // exists on disk — fall through to the "not found" error below.
         }
       }
     }
@@ -461,8 +533,11 @@ server.registerTool(
 
 export {
   ALLOWED_DIRS,
+  ALLOWED_DIRS_REAL,
   buildListTestsCmd,
+  canonicalize,
   collectSpecs,
+  formatStartupBanner,
   isInside,
   loadPackageMeta,
   parseAllowedDirs,
@@ -471,14 +546,7 @@ export {
 };
 
 if (realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  process.stderr.write(
-    `[playwright-report-mcp] launchCwd=${launchCwd}\n` +
-      `[playwright-report-mcp] PW_ALLOWED_DIRS=${ALLOWED_DIRS.join(', ')}` +
-      (process.env.PW_ALLOWED_DIRS === undefined || process.env.PW_ALLOWED_DIRS === ''
-        ? ' (default — authorizing only launchCwd)'
-        : '') +
-      '\n'
-  );
+  process.stderr.write(formatStartupBanner(launchCwd, ALLOWED_DIRS, process.env.PW_ALLOWED_DIRS));
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
