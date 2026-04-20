@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
@@ -17,7 +17,16 @@ vi.mock('child_process', async (importOriginal) => {
 });
 
 import { spawnSync } from 'child_process';
-import { buildListTestsCmd, loadPackageMeta, parseListJson, server } from '../index.js';
+import {
+  ALLOWED_DIRS,
+  buildListTestsCmd,
+  formatStartupBanner,
+  isInside,
+  loadPackageMeta,
+  parseAllowedDirs,
+  parseListJson,
+  server,
+} from '../index.js';
 
 const spawnSyncMock = spawnSync as unknown as ReturnType<typeof vi.fn>;
 
@@ -134,11 +143,10 @@ describe('run_tests — spec path validation', () => {
     expect(text).toContain('within the project directory');
   });
 
-  it('accepts an absolute spec path that resolves inside the project directory', async () => {
-    // Positive counterpart to the `..` rejection test: `resolve(PW_DIR, absPath)` returns
-    // absPath unchanged, so the validation must still accept it when it falls within PW_DIR.
-    const pwDir = process.env.PW_DIR as string;
-    const absInside = join(pwDir, 'tests', 'auth.spec.ts');
+  it('accepts an absolute spec path that resolves inside the working directory', async () => {
+    // Positive counterpart to the `..` rejection test: `resolve(wd, absPath)` returns
+    // absPath unchanged, so the validation must still accept it when it falls within wd.
+    const absInside = join(ALLOWED_DIRS[0], 'tests', 'auth.spec.ts');
     const result = await client.callTool({
       name: 'run_tests',
       arguments: { spec: absInside },
@@ -1101,5 +1109,523 @@ describe('loadPackageMeta', () => {
 
   it('includes the baseDir in the thrown error message for diagnosability', () => {
     expect(() => loadPackageMeta(distDir)).toThrow(new RegExp(distDir.replace(/\./g, '\\.')));
+  });
+});
+
+describe('isInside — segment-level containment', () => {
+  it('treats parent equal to child as contained', () => {
+    expect(isInside('/a/b', '/a/b')).toBe(true);
+  });
+
+  it('treats a strict descendant as contained', () => {
+    expect(isInside('/a/b', '/a/b/c')).toBe(true);
+    expect(isInside('/a/b', '/a/b/c/d')).toBe(true);
+  });
+
+  it('rejects a path above the parent', () => {
+    expect(isInside('/a/b', '/a')).toBe(false);
+  });
+
+  // Acceptance criterion: sibling-name bypass must be rejected. A raw
+  // String.prototype.startsWith('/a/b') would accept '/a/b-extra'.
+  it('rejects a sibling whose name shares a prefix with the parent', () => {
+    expect(isInside('/a/b', '/a/b-extra')).toBe(false);
+    expect(isInside('/Users/me/src/github/my-app', '/Users/me/src/github/my-app-evil')).toBe(false);
+  });
+
+  it('rejects a fully disjoint path', () => {
+    expect(isInside('/a/b', '/c/d')).toBe(false);
+  });
+});
+
+describe('parseAllowedDirs — startup resolution', () => {
+  it('defaults to a single "." entry when env is unset', () => {
+    expect(parseAllowedDirs(undefined, '/home/alice/proj')).toEqual(['/home/alice/proj']);
+  });
+
+  it('defaults to a single "." entry when env is the empty string', () => {
+    expect(parseAllowedDirs('', '/home/alice/proj')).toEqual(['/home/alice/proj']);
+  });
+
+  // Acceptance criterion: relative entries resolve against launchCwd so a
+  // committed .mcp.json works across contributors without baking absolute paths.
+  it('resolves relative entries against launchCwd — contributor A', () => {
+    expect(parseAllowedDirs('..', '/Users/alice/code/my-app')).toEqual(['/Users/alice/code']);
+  });
+
+  it('resolves relative entries against launchCwd — contributor B', () => {
+    expect(parseAllowedDirs('..', '/home/bob/src/my-app')).toEqual(['/home/bob/src']);
+  });
+
+  it('preserves absolute entries verbatim', () => {
+    expect(parseAllowedDirs('/etc', '/home/alice/proj')).toEqual(['/etc']);
+  });
+
+  it('splits multiple entries on path.delimiter', () => {
+    const sep = process.platform === 'win32' ? ';' : ':';
+    expect(parseAllowedDirs(`.${sep}..`, '/home/alice/proj')).toEqual([
+      '/home/alice/proj',
+      '/home/alice',
+    ]);
+  });
+});
+
+describe('workingDirectory — allowlist gate', () => {
+  beforeEach(() => spawnSyncMock.mockClear());
+
+  it('rejects workingDirectory outside the allowlist without spawning', async () => {
+    const result = await client.callTool({
+      name: 'run_tests',
+      arguments: { workingDirectory: '/etc' },
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content as TextContent[])[0].text;
+    expect(text).toContain('PW_ALLOWED_DIRS');
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+
+  // Acceptance criterion: sibling-name bypass at the tool boundary.
+  // The allowlist is the repo root; '<repo-root>-evil' shares a prefix but is
+  // a sibling, so it must be rejected exactly like a disjoint path.
+  it('rejects sibling-name bypass at the tool boundary', async () => {
+    const sibling = ALLOWED_DIRS[0] + '-evil';
+    const result = await client.callTool({
+      name: 'run_tests',
+      arguments: { workingDirectory: sibling },
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content as TextContent[])[0].text;
+    expect(text).toContain('PW_ALLOWED_DIRS');
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('passes a workingDirectory under the allowlist as the spawn cwd', async () => {
+    await client.callTool({
+      name: 'run_tests',
+      arguments: { workingDirectory: 'test/fixtures' },
+    });
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+    const options = spawnSyncMock.mock.calls[0][2] as { cwd: string };
+    expect(options.cwd.endsWith('test/fixtures')).toBe(true);
+  });
+
+  it('omitting workingDirectory defaults to launchCwd — spawn cwd matches ALLOWED_DIRS[0]', async () => {
+    await client.callTool({ name: 'run_tests', arguments: {} });
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+    const options = spawnSyncMock.mock.calls[0][2] as { cwd: string };
+    expect(options.cwd).toBe(ALLOWED_DIRS[0]);
+  });
+
+  it('gates list_tests on the allowlist', async () => {
+    const result = await client.callTool({
+      name: 'list_tests',
+      arguments: { workingDirectory: '/etc' },
+    });
+    expect(result.isError).toBe(true);
+    expect((result.content as TextContent[])[0].text).toContain('PW_ALLOWED_DIRS');
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('gates get_failed_tests on the allowlist', async () => {
+    const result = await client.callTool({
+      name: 'get_failed_tests',
+      arguments: { workingDirectory: '/etc' },
+    });
+    expect(result.isError).toBe(true);
+    expect((result.content as TextContent[])[0].text).toContain('PW_ALLOWED_DIRS');
+  });
+
+  it('gates get_test_attachment on the allowlist', async () => {
+    const result = await client.callTool({
+      name: 'get_test_attachment',
+      arguments: {
+        workingDirectory: '/etc',
+        testTitle: 'login fails with wrong password',
+        attachmentName: 'diagnosis',
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect((result.content as TextContent[])[0].text).toContain('PW_ALLOWED_DIRS');
+  });
+});
+
+describe('get_test_attachment — path-traversal defense', () => {
+  afterEach(() => writeDefaultReport());
+
+  // Acceptance criterion: attachment paths that escape workingDirectory must
+  // be rejected even if results.json records them. Craft a results.json whose
+  // attachment.path contains `..` components that escape the working dir.
+  it('rejects an attachment whose recorded path escapes workingDirectory via ..', async () => {
+    const escapingPath = join(resultsDir, '..', '..', '..', 'etc', 'passwd');
+    writeCustomReport({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 'traversal test',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              ok: false,
+              tests: [
+                {
+                  projectName: 'Chromium',
+                  status: 'unexpected',
+                  results: [
+                    {
+                      status: 'failed',
+                      duration: 10,
+                      attachments: [
+                        { name: 'diag', contentType: 'text/plain', path: escapingPath },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      stats: { expected: 0, unexpected: 1, skipped: 0, duration: 10 },
+    });
+
+    const result = await client.callTool({
+      name: 'get_test_attachment',
+      arguments: {
+        workingDirectory: 'test/fixtures',
+        testTitle: 'traversal test',
+        attachmentName: 'diag',
+      },
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content as TextContent[])[0].text;
+    expect(text).toContain('escapes workingDirectory');
+  });
+
+  it('rejects an absolute attachment path outside workingDirectory', async () => {
+    writeCustomReport({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 'absolute test',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              ok: false,
+              tests: [
+                {
+                  projectName: 'Chromium',
+                  status: 'unexpected',
+                  results: [
+                    {
+                      status: 'failed',
+                      duration: 10,
+                      attachments: [
+                        { name: 'diag', contentType: 'text/plain', path: '/etc/passwd' },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      stats: { expected: 0, unexpected: 1, skipped: 0, duration: 10 },
+    });
+
+    const result = await client.callTool({
+      name: 'get_test_attachment',
+      arguments: {
+        workingDirectory: 'test/fixtures',
+        testTitle: 'absolute test',
+        attachmentName: 'diag',
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect((result.content as TextContent[])[0].text).toContain('escapes workingDirectory');
+  });
+});
+
+describe('workingDirectory — existence check (AC9)', () => {
+  beforeEach(() => spawnSyncMock.mockClear());
+
+  // Acceptance criterion: a nonexistent workingDirectory that would otherwise
+  // pass the allowlist must be rejected with a specific error. Without the
+  // existence check, Playwright spawns against a missing cwd and ENOENT
+  // surfaces as a generic "Failed to spawn" — the silent fall-through the
+  // issue explicitly forbids.
+  it('rejects a nonexistent workingDirectory with a dedicated error and no spawn', async () => {
+    const result = await client.callTool({
+      name: 'run_tests',
+      arguments: { workingDirectory: 'test/fixtures/does-not-exist-xyzzy' },
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content as TextContent[])[0].text;
+    expect(text).toContain('does not exist');
+    expect(text).not.toContain('Failed to spawn');
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a workingDirectory that exists but is a file, not a directory', async () => {
+    // The fixture results.json file exists under the allowlist; pointing at it
+    // as a "directory" must be rejected with a file-vs-dir specific error.
+    const filePath = fileURLToPath(
+      new URL('./fixtures/test-results/results.json', import.meta.url)
+    );
+    const result = await client.callTool({
+      name: 'run_tests',
+      arguments: { workingDirectory: filePath },
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content as TextContent[])[0].text;
+    expect(text).toContain('not a directory');
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('workingDirectory — positive acceptance on the other three tools (AC5)', () => {
+  beforeEach(() => spawnSyncMock.mockClear());
+
+  // AC5 says the parameter is accepted by list_tests, get_failed_tests, and
+  // get_test_attachment with the same allowlist check. Negative paths are
+  // covered above; these are the positive counterparts.
+
+  it('list_tests accepts a workingDirectory under the allowlist and uses it as spawn cwd', async () => {
+    spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: '{"suites":[]}', stderr: '' });
+    const data = parseResult(
+      await client.callTool({
+        name: 'list_tests',
+        arguments: { workingDirectory: 'test/fixtures' },
+      })
+    );
+    expect(data).toEqual({ count: 0, tests: [] });
+    const options = spawnSyncMock.mock.calls[0][2] as { cwd: string };
+    expect(options.cwd.endsWith('test/fixtures')).toBe(true);
+  });
+
+  it('get_failed_tests accepts a workingDirectory under the allowlist and returns the report', async () => {
+    const data = parseResult(
+      await client.callTool({
+        name: 'get_failed_tests',
+        arguments: { workingDirectory: 'test/fixtures' },
+      })
+    );
+    expect(data.failedCount).toBe(1);
+    expect(data.tests[0].title).toBe('login fails with wrong password');
+  });
+
+  it('get_test_attachment accepts a workingDirectory under the allowlist and returns content', async () => {
+    const data = parseResult(
+      await client.callTool({
+        name: 'get_test_attachment',
+        arguments: {
+          workingDirectory: 'test/fixtures',
+          testTitle: 'login fails with wrong password',
+          attachmentName: 'diagnosis',
+        },
+      })
+    );
+    expect(data.content).toContain('Button selector');
+  });
+});
+
+describe('formatStartupBanner — AC7 startup log', () => {
+  // Acceptance criterion: when PW_ALLOWED_DIRS is unset, the server surfaces
+  // "default — authorizing only launchCwd" so operators know what is allowed.
+  it('annotates the default case when PW_ALLOWED_DIRS is unset', () => {
+    const banner = formatStartupBanner('/some/launch/dir', ['/some/launch/dir'], undefined);
+    expect(banner).toContain('launchCwd=/some/launch/dir');
+    expect(banner).toContain('PW_ALLOWED_DIRS=/some/launch/dir');
+    expect(banner).toContain('default — authorizing only launchCwd');
+  });
+
+  it('annotates the default case when PW_ALLOWED_DIRS is the empty string', () => {
+    const banner = formatStartupBanner('/x', ['/x'], '');
+    expect(banner).toContain('default — authorizing only launchCwd');
+  });
+
+  it('omits the default annotation when the env var is set', () => {
+    const banner = formatStartupBanner('/x', ['/x', '/y'], '..');
+    expect(banner).toContain('PW_ALLOWED_DIRS=/x, /y');
+    expect(banner).not.toContain('default — authorizing only launchCwd');
+  });
+
+  it('terminates with a newline so it does not run into subsequent log lines', () => {
+    const banner = formatStartupBanner('/x', ['/x'], undefined);
+    expect(banner.endsWith('\n')).toBe(true);
+  });
+});
+
+// Symlink-based allowlist/attachment bypasses are the highest-severity risk
+// flagged in this PR's security review. These regressions exercise the
+// `realpathSync` canonicalization that closes the lexical-only containment
+// hole. Symlink creation needs elevated privileges on Windows, so each test
+// self-skips via `trySymlink` when creation fails.
+
+function trySymlink(target: string, path: string): boolean {
+  try {
+    symlinkSync(target, path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+describe('workingDirectory — symlink-based allowlist bypass (security)', () => {
+  const fixtures = fileURLToPath(new URL('./fixtures', import.meta.url));
+  const symlinkPath = join(fixtures, 'symlink-escape');
+  let escapeTarget: string;
+
+  beforeAll(() => {
+    escapeTarget = mkdtempSync(join(tmpdir(), 'pw-report-mcp-symlink-target-'));
+  });
+
+  afterAll(() => {
+    rmSync(escapeTarget, { recursive: true, force: true });
+    try {
+      unlinkSync(symlinkPath);
+    } catch {
+      // absent or already cleaned
+    }
+  });
+
+  beforeEach(() => spawnSyncMock.mockClear());
+  afterEach(() => {
+    try {
+      unlinkSync(symlinkPath);
+    } catch {
+      // absent
+    }
+  });
+
+  // Lexical isInside() passes because the symlink's path is literally under
+  // the allowlist (repo root). Without realpathSync canonicalization, spawnSync
+  // would chdir to the target and Playwright would load a malicious
+  // playwright.config.ts from there. The fix is to reject such paths.
+  it('rejects a workingDirectory that is a symlink escaping the allowlist', async () => {
+    if (!trySymlink(escapeTarget, symlinkPath)) {
+      console.warn('[test] symlinkSync unavailable — skipping');
+      return;
+    }
+    const result = await client.callTool({
+      name: 'run_tests',
+      arguments: { workingDirectory: 'test/fixtures/symlink-escape' },
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content as TextContent[])[0].text;
+    expect(text).toContain('resolves via symlink');
+    expect(text).toContain('PW_ALLOWED_DIRS');
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+
+  // A symlink whose target is still inside the allowlist (e.g. a convenience
+  // link within the same project) must continue to work.
+  it('accepts a symlink whose target is inside the allowlist', async () => {
+    const innerTarget = join(fixtures);
+    if (!trySymlink(innerTarget, symlinkPath)) {
+      console.warn('[test] symlinkSync unavailable — skipping');
+      return;
+    }
+    await client.callTool({
+      name: 'run_tests',
+      arguments: { workingDirectory: 'test/fixtures/symlink-escape' },
+    });
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+    const options = spawnSyncMock.mock.calls[0][2] as { cwd: string };
+    // cwd is canonicalized — matches the target, not the symlink path.
+    expect(options.cwd).toBe(innerTarget);
+  });
+});
+
+describe('get_test_attachment — symlink-based exfiltration (security)', () => {
+  const fixtures = fileURLToPath(new URL('./fixtures', import.meta.url));
+  const attachmentSymlinkPath = join(fixtures, 'test-results', 'sneaky.txt');
+  let secretPath: string;
+
+  beforeAll(() => {
+    // A secret file OUTSIDE the working directory (test/fixtures). Represents
+    // anything the MCP process could otherwise read — ~/.ssh/id_rsa, .env, etc.
+    const secretDir = mkdtempSync(join(tmpdir(), 'pw-report-mcp-secret-'));
+    secretPath = join(secretDir, 'id_rsa');
+    writeFileSync(secretPath, '-----BEGIN PRIVATE KEY-----\nSECRET\n-----END PRIVATE KEY-----\n');
+  });
+
+  afterAll(() => {
+    rmSync(secretPath, { force: true });
+    rmSync(join(secretPath, '..'), { recursive: true, force: true });
+  });
+
+  afterEach(() => {
+    writeDefaultReport();
+    try {
+      unlinkSync(attachmentSymlinkPath);
+    } catch {
+      // absent
+    }
+  });
+
+  // The attacker-controlled results.json declares a text attachment whose
+  // path is a symlink pointing at a secret file outside the working dir.
+  // Without canonicalizing the attachment path before readFileSync, the
+  // server would follow the symlink and return the secret contents.
+  it('rejects an attachment whose path is a symlink escaping workingDirectory', async () => {
+    if (!trySymlink(secretPath, attachmentSymlinkPath)) {
+      console.warn('[test] symlinkSync unavailable — skipping');
+      return;
+    }
+    writeCustomReport({
+      suites: [
+        {
+          title: 'x.spec.ts',
+          file: 'tests/x.spec.ts',
+          specs: [
+            {
+              title: 'symlink test',
+              file: 'tests/x.spec.ts',
+              line: 1,
+              ok: false,
+              tests: [
+                {
+                  projectName: 'Chromium',
+                  status: 'unexpected',
+                  results: [
+                    {
+                      status: 'failed',
+                      duration: 10,
+                      attachments: [
+                        {
+                          name: 'diag',
+                          contentType: 'text/plain',
+                          path: attachmentSymlinkPath,
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      stats: { expected: 0, unexpected: 1, skipped: 0, duration: 10 },
+    });
+
+    const result = await client.callTool({
+      name: 'get_test_attachment',
+      arguments: {
+        workingDirectory: 'test/fixtures',
+        testTitle: 'symlink test',
+        attachmentName: 'diag',
+      },
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content as TextContent[])[0].text;
+    expect(text).toContain('resolves via symlink');
+    expect(text).toContain('escapes workingDirectory');
+    expect(text).not.toContain('BEGIN PRIVATE KEY');
   });
 });

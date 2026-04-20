@@ -156,16 +156,19 @@ Tested with **Claude Code (CLI)**. Should work with any MCP-compatible client th
 
 ## Tools
 
+All four tools accept an optional `workingDirectory` parameter — see [Multi-worktree support](#multi-worktree-support).
+
 ### `run_tests`
 
 Runs the Playwright test suite and returns structured pass/fail results.
 
-| Input     | Type               | Description                                                                                                                                                                                                                                                     |
-| --------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `spec`    | string (optional)  | Spec file path relative to the project directory, e.g. `tests/login.spec.ts`. Must stay within the project directory.                                                                                                                                           |
-| `browser` | enum (optional)    | `Chromium`, `Firefox`, `Webkit`, `Mobile Chrome`, `Mobile Safari`                                                                                                                                                                                               |
-| `tag`     | string (optional)  | Tag filter, e.g. `@smoke`                                                                                                                                                                                                                                       |
-| `timeout` | integer (optional) | Timeout in milliseconds for the whole test run. Defaults to `300000` (5 min). Use a larger value for long suites or a smaller one to fail fast. When the run is killed by this timeout, the tool returns an explicit error rather than a generic non-zero exit. |
+| Input              | Type               | Description                                                                                                                                                                                                                                                     |
+| ------------------ | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `workingDirectory` | string (optional)  | Playwright project directory. Absolute or relative to the MCP server launch directory. Defaults to `"."`. Must be under `PW_ALLOWED_DIRS` — see [Multi-worktree support](#multi-worktree-support).                                                              |
+| `spec`             | string (optional)  | Spec file path relative to the project directory, e.g. `tests/login.spec.ts`. Must stay within the project directory.                                                                                                                                           |
+| `browser`          | enum (optional)    | `Chromium`, `Firefox`, `Webkit`, `Mobile Chrome`, `Mobile Safari`                                                                                                                                                                                               |
+| `tag`              | string (optional)  | Tag filter, e.g. `@smoke`                                                                                                                                                                                                                                       |
+| `timeout`          | integer (optional) | Timeout in milliseconds for the whole test run. Defaults to `300000` (5 min). Use a larger value for long suites or a smaller one to fail fast. When the run is killed by this timeout, the tool returns an explicit error rather than a generic non-zero exit. |
 
 Returns: exit code, run stats, and a summary of all tests with status, duration, and error per project.
 
@@ -173,26 +176,32 @@ Returns: exit code, run stats, and a summary of all tests with status, duration,
 
 Returns failed tests from the last run with error messages and attachment paths. Does not re-run tests — reads the existing `results.json`.
 
+| Input              | Type              | Description                                                               |
+| ------------------ | ----------------- | ------------------------------------------------------------------------- |
+| `workingDirectory` | string (optional) | See [Multi-worktree support](#multi-worktree-support). Defaults to `"."`. |
+
 Returns: failed test count, titles, file paths, per-project status, error messages, and attachment paths.
 
 ### `get_test_attachment`
 
 Reads the content of a named text attachment for a specific test from the last run.
 
-| Input            | Type   | Description                                                        |
-| ---------------- | ------ | ------------------------------------------------------------------ |
-| `testTitle`      | string | Exact test title as shown in the report                            |
-| `attachmentName` | string | Attachment name, e.g. `error-context`, `ai-diagnosis`, `page-html` |
+| Input              | Type              | Description                                                               |
+| ------------------ | ----------------- | ------------------------------------------------------------------------- |
+| `workingDirectory` | string (optional) | See [Multi-worktree support](#multi-worktree-support). Defaults to `"."`. |
+| `testTitle`        | string            | Exact test title as shown in the report                                   |
+| `attachmentName`   | string            | Attachment name, e.g. `error-context`, `ai-diagnosis`, `page-html`        |
 
-Returns: the attachment content as text. Binary attachments and files over 1 MB are rejected with an error.
+Returns: the attachment content as text. Binary attachments and files over 1 MB are rejected with an error. Attachment paths recorded in `results.json` that escape `workingDirectory` (via `..` or absolute paths pointing elsewhere) are refused.
 
 ### `list_tests`
 
 Lists all tests with their spec file and tags without running them.
 
-| Input | Type              | Description                  |
-| ----- | ----------------- | ---------------------------- |
-| `tag` | string (optional) | Filter by tag, e.g. `@smoke` |
+| Input              | Type              | Description                                                               |
+| ------------------ | ----------------- | ------------------------------------------------------------------------- |
+| `workingDirectory` | string (optional) | See [Multi-worktree support](#multi-worktree-support). Defaults to `"."`. |
+| `tag`              | string (optional) | Filter by tag, e.g. `@smoke`                                              |
 
 ---
 
@@ -244,35 +253,48 @@ Add to your `.mcp.json` at the root of your project:
 
 ### Environment variables
 
-| Variable          | Default                              | Description                                                                       |
-| ----------------- | ------------------------------------ | --------------------------------------------------------------------------------- |
-| `PW_DIR`          | `process.cwd()`                      | Root of the Playwright project — used as the working directory when running tests |
-| `PW_RESULTS_FILE` | `<PW_DIR>/test-results/results.json` | Absolute path to the JSON reporter output file                                    |
+| Variable          | Default                                        | Description                                                                                                                                                                      |
+| ----------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PW_ALLOWED_DIRS` | `"."` (authorizes only the launch dir)         | `path.delimiter`-separated list of directories the `workingDirectory` parameter may point at. Entries may be absolute or relative (resolved once against launch cwd at startup). |
+| `PW_RESULTS_FILE` | `<workingDirectory>/test-results/results.json` | Absolute path to the JSON reporter output file. If set, overrides the per-call default for every call.                                                                           |
 
-Set `PW_RESULTS_FILE` if your `playwright.config.ts` writes the report to a non-default location.
+Set `PW_RESULTS_FILE` if your `playwright.config.ts` writes the report to a non-default location. Leave it unset in multi-worktree setups so each `workingDirectory` gets its own `test-results/results.json`.
 
-### Multiple Playwright projects
+### Multi-worktree support
 
-Use `PW_DIR` to point the server at any Playwright project directory. Register a separate entry per project:
+`run_tests`, `list_tests`, `get_failed_tests`, and `get_test_attachment` all accept an optional `workingDirectory` parameter — absolute, or relative to the MCP server's launch directory. This lets a single long-lived MCP session drive tests across multiple git worktrees without restarting.
+
+Because a Playwright config is a Node module that executes on `playwright test` startup, the server guards the parameter with an allowlist. Callers that point `workingDirectory` at a directory outside `PW_ALLOWED_DIRS` get a structured error and no child process is spawned.
+
+**Default (no worktrees).** Leave `PW_ALLOWED_DIRS` unset. The allowlist becomes `"."` — only the launch directory — and the default `workingDirectory` (also `"."`) resolves to the launch directory. Zero configuration.
+
+**Sibling worktrees.** Set `PW_ALLOWED_DIRS=".."` in your `.mcp.json` to authorize every sibling of the launch directory. Relative entries resolve against the launch cwd at startup, so the same `.mcp.json` works for every contributor without baking in absolute paths:
 
 ```json
 {
   "mcpServers": {
-    "playwright-report-mcp-e2e": {
+    "playwright-report-mcp": {
       "command": "npx",
       "args": ["-y", "playwright-report-mcp"],
-      "env": { "PW_DIR": "/absolute/path/to/your/e2e/project" },
-      "type": "stdio"
-    },
-    "playwright-report-mcp-integration": {
-      "command": "npx",
-      "args": ["-y", "playwright-report-mcp"],
-      "env": { "PW_DIR": "/absolute/path/to/your/integration/project" },
+      "env": { "PW_ALLOWED_DIRS": ".." },
       "type": "stdio"
     }
   }
 }
 ```
+
+Then point calls at any sibling worktree:
+
+```jsonc
+{
+  "name": "run_tests",
+  "arguments": { "workingDirectory": "../my-app-feat-auth" },
+}
+```
+
+**Multiple projects.** Either launch the MCP client from each project and use the default allowlist, or set `PW_ALLOWED_DIRS` to the shared parent and pass `workingDirectory` per call. The allowlist check runs at a path-segment boundary, so an entry authorizing `/src/my-app` will not authorize `/src/my-app-evil`.
+
+> **Breaking change (2.x → next):** the `PW_DIR` env var has been removed. Either launch the MCP client from inside the Playwright project directory (zero-config, default `workingDirectory: "."` works), or pass `workingDirectory` per call and set `PW_ALLOWED_DIRS` accordingly.
 
 ---
 
