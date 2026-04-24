@@ -658,6 +658,146 @@ describe('run_tests — command construction', () => {
     expect(args).toContain('@smoke');
     expect(args.some((a) => a.endsWith('tests/auth.spec.ts'))).toBe(true);
   });
+
+  it('passes --update-snapshots with the requested mode', async () => {
+    await client.callTool({
+      name: 'run_tests',
+      arguments: { updateSnapshots: 'changed' },
+    });
+    const args = spawnSyncMock.mock.calls[0][1] as string[];
+    const i = args.indexOf('--update-snapshots');
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(args[i + 1]).toBe('changed');
+  });
+
+  it('omits --update-snapshots when the field is not set', async () => {
+    await client.callTool({ name: 'run_tests', arguments: {} });
+    const args = spawnSyncMock.mock.calls[0][1] as string[];
+    expect(args).not.toContain('--update-snapshots');
+  });
+
+  it('rejects an invalid updateSnapshots mode at the schema boundary', async () => {
+    const result = await client.callTool({
+      name: 'run_tests',
+      arguments: { updateSnapshots: 'sometimes' as unknown as 'all' },
+    });
+    expect(result.isError).toBe(true);
+  });
+
+  it('passes --headed when headed is true', async () => {
+    await client.callTool({ name: 'run_tests', arguments: { headed: true } });
+    const args = spawnSyncMock.mock.calls[0][1] as string[];
+    expect(args).toContain('--headed');
+  });
+
+  it('omits --headed when headed is false', async () => {
+    await client.callTool({ name: 'run_tests', arguments: { headed: false } });
+    const args = spawnSyncMock.mock.calls[0][1] as string[];
+    expect(args).not.toContain('--headed');
+  });
+
+  it('passes --workers with the requested positive integer', async () => {
+    await client.callTool({ name: 'run_tests', arguments: { workers: 4 } });
+    const args = spawnSyncMock.mock.calls[0][1] as string[];
+    const i = args.indexOf('--workers');
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(args[i + 1]).toBe('4');
+  });
+
+  it('rejects non-positive workers values at the schema boundary', async () => {
+    const result = await client.callTool({ name: 'run_tests', arguments: { workers: 0 } });
+    expect(result.isError).toBe(true);
+  });
+
+  it('passes --retries with zero when retries is 0', async () => {
+    // Retries=0 is a meaningful value (disable retries), not a "not set" signal.
+    await client.callTool({ name: 'run_tests', arguments: { retries: 0 } });
+    const args = spawnSyncMock.mock.calls[0][1] as string[];
+    const i = args.indexOf('--retries');
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(args[i + 1]).toBe('0');
+  });
+
+  it('rejects negative retries values at the schema boundary', async () => {
+    const result = await client.callTool({ name: 'run_tests', arguments: { retries: -1 } });
+    expect(result.isError).toBe(true);
+  });
+
+  it('passes --max-failures with the requested positive integer', async () => {
+    await client.callTool({ name: 'run_tests', arguments: { maxFailures: 3 } });
+    const args = spawnSyncMock.mock.calls[0][1] as string[];
+    const i = args.indexOf('--max-failures');
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(args[i + 1]).toBe('3');
+  });
+
+  it('rejects non-positive maxFailures values at the schema boundary', async () => {
+    const result = await client.callTool({ name: 'run_tests', arguments: { maxFailures: 0 } });
+    expect(result.isError).toBe(true);
+  });
+
+  it('passes --trace with the requested mode', async () => {
+    await client.callTool({
+      name: 'run_tests',
+      arguments: { trace: 'retain-on-failure' },
+    });
+    const args = spawnSyncMock.mock.calls[0][1] as string[];
+    const i = args.indexOf('--trace');
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(args[i + 1]).toBe('retain-on-failure');
+  });
+
+  it("passes --trace 'off' when the caller explicitly disables tracing", async () => {
+    // 'off' is a truthy string, so `if (trace)` still fires. A regression that
+    // changed the conditional to `if (trace && trace !== 'off')` would drop this
+    // mode silently — worth a dedicated test against the whole enum surface.
+    await client.callTool({ name: 'run_tests', arguments: { trace: 'off' } });
+    const args = spawnSyncMock.mock.calls[0][1] as string[];
+    const i = args.indexOf('--trace');
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(args[i + 1]).toBe('off');
+  });
+
+  it('rejects an invalid trace mode at the schema boundary', async () => {
+    const result = await client.callTool({
+      name: 'run_tests',
+      arguments: { trace: 'sometimes' as unknown as 'on' },
+    });
+    expect(result.isError).toBe(true);
+  });
+
+  it('combines multiple flags in one call without interfering with each other', async () => {
+    // Assert adjacency, not just presence — a regression that pushed the value
+    // and flag as one string or reordered them would still pass a .toContain
+    // check but fail Playwright at runtime.
+    await client.callTool({
+      name: 'run_tests',
+      arguments: {
+        updateSnapshots: 'all',
+        headed: true,
+        workers: 2,
+        retries: 1,
+        maxFailures: 5,
+        trace: 'on',
+      },
+    });
+    const args = spawnSyncMock.mock.calls[0][1] as string[];
+    // Guard against a future change that drops a flag entirely — without this,
+    // a missing flag would return args[0] ('npx') and produce a confusing
+    // "expected 'npx' to be 'all'" failure message instead of pinpointing the
+    // flag that went missing.
+    const pair = (flag: string) => {
+      const i = args.indexOf(flag);
+      expect(i, `${flag} not found in args: ${args.join(' ')}`).toBeGreaterThanOrEqual(0);
+      return args[i + 1];
+    };
+    expect(pair('--update-snapshots')).toBe('all');
+    expect(args).toContain('--headed');
+    expect(pair('--workers')).toBe('2');
+    expect(pair('--retries')).toBe('1');
+    expect(pair('--max-failures')).toBe('5');
+    expect(pair('--trace')).toBe('on');
+  });
 });
 
 describe('run_tests — edge cases in spawn result', () => {
