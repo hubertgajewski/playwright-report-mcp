@@ -731,6 +731,11 @@ describe('run_tests — command construction', () => {
     expect(args[i + 1]).toBe('3');
   });
 
+  it('rejects non-positive maxFailures values at the schema boundary', async () => {
+    const result = await client.callTool({ name: 'run_tests', arguments: { maxFailures: 0 } });
+    expect(result.isError).toBe(true);
+  });
+
   it('passes --trace with the requested mode', async () => {
     await client.callTool({
       name: 'run_tests',
@@ -777,7 +782,15 @@ describe('run_tests — command construction', () => {
       },
     });
     const args = spawnSyncMock.mock.calls[0][1] as string[];
-    const pair = (flag: string) => args[args.indexOf(flag) + 1];
+    // Guard against a future change that drops a flag entirely — without this,
+    // a missing flag would return args[0] ('npx') and produce a confusing
+    // "expected 'npx' to be 'all'" failure message instead of pinpointing the
+    // flag that went missing.
+    const pair = (flag: string) => {
+      const i = args.indexOf(flag);
+      expect(i, `${flag} not found in args: ${args.join(' ')}`).toBeGreaterThanOrEqual(0);
+      return args[i + 1];
+    };
     expect(pair('--update-snapshots')).toBe('all');
     expect(args).toContain('--headed');
     expect(pair('--workers')).toBe('2');
