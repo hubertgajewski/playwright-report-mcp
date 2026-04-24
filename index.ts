@@ -326,9 +326,58 @@ server.registerTool(
         .positive()
         .optional()
         .describe('Timeout in milliseconds for the whole test run. Defaults to 300000.'),
+      updateSnapshots: z
+        .enum(['all', 'changed', 'missing', 'none'])
+        .optional()
+        .describe(
+          'Update snapshot baselines. Playwright default is "missing"; "changed" updates differing + missing.'
+        ),
+      headed: z.boolean().optional().describe('Run with a visible browser window.'),
+      workers: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('Number of parallel workers (positive integer).'),
+      retries: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe('Maximum retry count for flaky tests; 0 disables retries.'),
+      maxFailures: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('Stop the run after this many failures.'),
+      trace: z
+        .enum([
+          'on',
+          'off',
+          'on-first-retry',
+          'on-all-retries',
+          'retain-on-failure',
+          'retain-on-first-failure',
+          'retain-on-failure-and-retries',
+        ])
+        .optional()
+        .describe('Force Playwright tracing mode, overriding playwright.config.ts.'),
     },
   },
-  async ({ workingDirectory, spec, browser, tag, timeout }) => {
+  async ({
+    workingDirectory,
+    spec,
+    browser,
+    tag,
+    timeout,
+    updateSnapshots,
+    headed,
+    workers,
+    retries,
+    maxFailures,
+    trace,
+  }) => {
     const wd = resolveWorkingDir(workingDirectory);
     if ('error' in wd) return err(wd.error);
 
@@ -340,6 +389,12 @@ server.registerTool(
     }
     if (browser) cmd.push('--project', browser);
     if (tag) cmd.push('--grep', tag);
+    if (updateSnapshots) cmd.push('--update-snapshots', updateSnapshots);
+    if (headed) cmd.push('--headed');
+    if (workers !== undefined) cmd.push('--workers', String(workers));
+    if (retries !== undefined) cmd.push('--retries', String(retries));
+    if (maxFailures !== undefined) cmd.push('--max-failures', String(maxFailures));
+    if (trace) cmd.push('--trace', trace);
 
     const effectiveTimeout = timeout ?? 300_000;
     const result = runPlaywright(cmd, wd.dir, effectiveTimeout);
