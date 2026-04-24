@@ -332,7 +332,12 @@ server.registerTool(
         .describe(
           'Update snapshot baselines. Playwright default is "missing"; "changed" updates differing + missing.'
         ),
-      headed: z.boolean().optional().describe('Run with a visible browser window.'),
+      headed: z
+        .boolean()
+        .optional()
+        .describe(
+          'Run with a visible browser window. Omitting or setting false leaves playwright.config.ts intact — Playwright has no --no-headed flag, so false does not force headless when the config sets headed.'
+        ),
       workers: z
         .number()
         .int()

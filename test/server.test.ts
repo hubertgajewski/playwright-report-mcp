@@ -742,6 +742,17 @@ describe('run_tests — command construction', () => {
     expect(args[i + 1]).toBe('retain-on-failure');
   });
 
+  it("passes --trace 'off' when the caller explicitly disables tracing", async () => {
+    // 'off' is a truthy string, so `if (trace)` still fires. A regression that
+    // changed the conditional to `if (trace && trace !== 'off')` would drop this
+    // mode silently — worth a dedicated test against the whole enum surface.
+    await client.callTool({ name: 'run_tests', arguments: { trace: 'off' } });
+    const args = spawnSyncMock.mock.calls[0][1] as string[];
+    const i = args.indexOf('--trace');
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(args[i + 1]).toBe('off');
+  });
+
   it('rejects an invalid trace mode at the schema boundary', async () => {
     const result = await client.callTool({
       name: 'run_tests',
@@ -751,6 +762,9 @@ describe('run_tests — command construction', () => {
   });
 
   it('combines multiple flags in one call without interfering with each other', async () => {
+    // Assert adjacency, not just presence — a regression that pushed the value
+    // and flag as one string or reordered them would still pass a .toContain
+    // check but fail Playwright at runtime.
     await client.callTool({
       name: 'run_tests',
       arguments: {
@@ -763,17 +777,13 @@ describe('run_tests — command construction', () => {
       },
     });
     const args = spawnSyncMock.mock.calls[0][1] as string[];
-    expect(args).toContain('--update-snapshots');
-    expect(args).toContain('all');
+    const pair = (flag: string) => args[args.indexOf(flag) + 1];
+    expect(pair('--update-snapshots')).toBe('all');
     expect(args).toContain('--headed');
-    expect(args).toContain('--workers');
-    expect(args).toContain('2');
-    expect(args).toContain('--retries');
-    expect(args).toContain('1');
-    expect(args).toContain('--max-failures');
-    expect(args).toContain('5');
-    expect(args).toContain('--trace');
-    expect(args).toContain('on');
+    expect(pair('--workers')).toBe('2');
+    expect(pair('--retries')).toBe('1');
+    expect(pair('--max-failures')).toBe('5');
+    expect(pair('--trace')).toBe('on');
   });
 });
 
