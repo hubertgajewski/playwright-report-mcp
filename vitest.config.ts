@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 export default defineConfig({
   test: {
     setupFiles: ['./test/setup.ts'],
-    exclude: [...configDefaults.exclude, '**/dist/**'],
+    exclude: [...configDefaults.exclude, '**/dist/**', 'test/fixtures/**', 'test/e2e.test.ts'],
     env: {
       PW_DIR: fileURLToPath(new URL('./test/fixtures', import.meta.url)),
     },

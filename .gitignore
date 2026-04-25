@@ -2,4 +2,6 @@ dist/
 node_modules/
 coverage/
 test/fixtures/test-results/
+test/fixtures/pw-project/node_modules/
+test/fixtures/pw-project/test-results/
 .mcpregistry_*

@@ -35,3 +35,32 @@ jobs:
         with:
           name: coverage
           path: coverage/
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run build
+      - name: Install fixture project dependencies
+        run: npm ci --prefix test/fixtures/pw-project
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-browsers-${{ hashFiles('test/fixtures/pw-project/package-lock.json') }}
+          restore-keys: pw-browsers-
+      - name: Install Playwright browsers
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+        working-directory: test/fixtures/pw-project
+      # Fixture already installed above; invoke vitest directly to avoid a
+      # redundant npm ci --prefix that `npm run test:e2e` would otherwise add.
+      - name: Run e2e tests
+        run: npx vitest run --config vitest.e2e.config.ts
