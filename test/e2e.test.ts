@@ -49,6 +49,14 @@ if (SKIP) {
 }
 
 type TextContent = { type: 'text'; text: string };
+type FailingTest = {
+  title: string;
+  failures: Array<{
+    status: string;
+    error: string | null;
+    attachments: Array<{ name: string; path?: string }>;
+  }>;
+};
 
 let client: Client;
 
@@ -138,18 +146,29 @@ describe.skipIf(SKIP)('MCP server e2e — fixture Playwright project', () => {
         const failing = (runData.tests as Array<{ ok: boolean }>).filter((t) => !t.ok);
         expect(failing.length).toBeGreaterThan(0);
       });
+
+      it('exits non-zero and reflects failure count in stats when the run has failures', () => {
+        expect(runData.exitCode).not.toBe(0);
+        expect((runData.stats as { unexpected: number }).unexpected).toBeGreaterThan(0);
+      });
     });
 
     describe('get_failed_tests', () => {
-      it('surfaces the deliberately failing spec', async () => {
+      it('surfaces the deliberately failing spec with error details and attachment path', async () => {
         const data = parseResult(
           await client.callTool({ name: 'get_failed_tests', arguments: {} })
         );
         expect(data.failedCount).toBeGreaterThan(0);
-        const failing = (data.tests as Array<{ title: string }>).find((t) =>
+        const failing = (data.tests as FailingTest[]).find((t) =>
           t.title.includes('deliberately fails')
         );
         expect(failing).toBeDefined();
+        expect(failing!.failures.length).toBeGreaterThan(0);
+        expect(failing!.failures[0].status).toBe('failed');
+        expect(failing!.failures[0].error).toBeTruthy();
+        const att = failing!.failures[0].attachments.find((a) => a.name === 'error-details');
+        expect(att).toBeDefined();
+        expect(att!.path).toBeTruthy();
       });
     });
 
@@ -171,7 +190,7 @@ describe.skipIf(SKIP)('MCP server e2e — fixture Playwright project', () => {
     // Runs AFTER get_failed_tests and get_test_attachment to avoid overwriting
     // results.json while those tools still need to read it.
     describe('run_tests timeout parameter', () => {
-      it('accepts the timeout parameter without error', async () => {
+      it('accepts the timeout parameter without error and exits 0 for a passing spec', async () => {
         const data = parseResult(
           await client.callTool({
             name: 'run_tests',
@@ -179,6 +198,7 @@ describe.skipIf(SKIP)('MCP server e2e — fixture Playwright project', () => {
           })
         );
         expect(typeof data.exitCode).toBe('number');
+        expect(data.exitCode).toBe(0);
         expect(data.stats).toBeDefined();
       }, 60_000);
     });
