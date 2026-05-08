@@ -4,11 +4,6 @@ on:
   workflow_run:
     workflows: ['Release']
     types: [completed]
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: 'Release ref, tag, or commit SHA to publish to the MCP registry'
-        required: true
 
 permissions:
   contents: read
@@ -17,24 +12,19 @@ permissions:
 jobs:
   publish:
     # Only run when the upstream Release workflow succeeded AND was itself triggered
-    # by a tag push, or when explicitly retried with a release ref.
+    # by a tag push — skips manual or branch-push runs of the upstream workflow.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (
-        github.event_name == 'workflow_run' &&
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'push'
-      )
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
     env:
       MCP_REGISTRY_SEARCH_URL: https://registry.modelcontextprotocol.io/v0.1/servers
     steps:
       # workflow_run runs against the default branch by default, which may have drifted
-      # past the release commit. Pin automatic publishes to the upstream workflow's
-      # commit SHA; manual retries check out the supplied release ref.
+      # past the release commit. Pin checkout to the upstream workflow's commit SHA.
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.event.workflow_run.head_sha }}
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Version-sync check
         run: |
