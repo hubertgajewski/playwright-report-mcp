@@ -1,6 +1,6 @@
 {
   "name": "playwright-report-mcp",
-  "version": "3.1.1",
+  "version": "3.1.2",
   "mcpName": "io.github.hubertgajewski/playwright-report-mcp",
   "description": "MCP server for running Playwright tests and reading structured results — designed for AI agents doing test failure analysis",
   "type": "module",
