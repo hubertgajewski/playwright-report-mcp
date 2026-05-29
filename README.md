@@ -179,16 +179,16 @@ Runs the Playwright test suite and returns structured pass/fail results.
 
 Returns: exit code, run stats, and a summary of all tests with status, duration, and error per project.
 
-When `wait` is `false`, returns immediately with `runId`, process metadata, output tails, and current `results.json` status. Poll `get_run_status` with that `runId` until `state` is `completed`, `failed`, or `timedOut`.
+When `wait` is `false`, returns immediately with `runId`, process metadata, output tails, and current `results.json` status. Poll `get_run_status` with that `runId` until `state` is `completed`, `failed`, or `timedOut`. The server allows one active tracked run per working directory, caps active tracked runs globally, and keeps a bounded history of recent terminal runs, so very old `runId` values can expire.
 
 ### `get_run_status`
 
 Returns the current status for a non-blocking run started by `run_tests` with `wait: false`.
 
-| Input              | Type              | Description                                                                                                  |
-| ------------------ | ----------------- | ------------------------------------------------------------------------------------------------------------ |
-| `runId`            | string (optional) | Run identifier returned by `run_tests wait=false`. When present, this selects a specific tracked run.        |
-| `workingDirectory` | string (optional) | Used only when `runId` is omitted. Returns the latest tracked run for that directory, or `idle` if no match. |
+| Input              | Type              | Description                                                                                                                                                        |
+| ------------------ | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `runId`            | string (optional) | Run identifier returned by `run_tests wait=false`. When present, this selects a specific tracked run.                                                              |
+| `workingDirectory` | string (optional) | When `runId` is omitted, returns the latest tracked run for that directory, or `idle` if no match. When supplied with `runId`, it must match that run's directory. |
 
 If both fields are omitted, `workingDirectory` defaults to `"."`. If no run is tracked for the resolved directory, the tool returns `state: "idle"` plus `results.json` metadata and last parsed stats when readable. It does not process-scan for external `npx playwright test` commands that were not started through this MCP server.
 
@@ -284,7 +284,7 @@ Set `PW_RESULTS_FILE` if your `playwright.config.ts` writes the report to a non-
 
 ### Multi-worktree support
 
-`run_tests`, `list_tests`, `get_failed_tests`, and `get_test_attachment` all accept an optional `workingDirectory` parameter — absolute, or relative to the MCP server's launch directory. `get_run_status` also accepts `workingDirectory` when `runId` is omitted; when `runId` is supplied, the run already records the resolved working directory. This lets a single long-lived MCP session drive tests across multiple git worktrees without restarting.
+`run_tests`, `list_tests`, `get_failed_tests`, and `get_test_attachment` all accept an optional `workingDirectory` parameter — absolute, or relative to the MCP server's launch directory. `get_run_status` also accepts `workingDirectory` when `runId` is omitted; when `runId` is supplied, any supplied `workingDirectory` must resolve to that run's recorded directory. This lets a single long-lived MCP session drive tests across multiple git worktrees without restarting.
 
 Because a Playwright config is a Node module that executes on `playwright test` startup, the server guards the parameter with an allowlist. Callers that point `workingDirectory` at a directory outside `PW_ALLOWED_DIRS` get a structured error and no child process is spawned.
 
@@ -366,7 +366,7 @@ npm test          # run tests once
 npm run test:watch  # watch mode
 ```
 
-Tests use [Vitest](https://vitest.dev/) and cover the `collectSpecs` helper (unit) and all four MCP tools via `InMemoryTransport` (integration). No build step or Playwright installation required to run the test suite.
+Tests use [Vitest](https://vitest.dev/) and cover the `collectSpecs` helper (unit) and all MCP tools via `InMemoryTransport` (integration). No build step or Playwright installation required to run the test suite.
 
 ---
 
