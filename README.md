@@ -179,7 +179,7 @@ Runs the Playwright test suite and returns structured pass/fail results.
 
 Returns: exit code, run stats, and a summary of all tests with status, duration, and error per project.
 
-When `wait` is `false`, returns immediately with `runId`, process metadata, output tails, and current `results.json` status. Poll `get_run_status` with that `runId` until `state` is `completed`, `failed`, or `timedOut`. The server allows one active tracked run per working directory, caps active tracked runs globally, and keeps a bounded history of recent terminal runs, so very old `runId` values can expire.
+When `wait` is `false`, returns immediately with `runId`, process metadata, compact numeric progress, and current `results.json` status. Poll `get_run_status` with that `runId` until `state` is `completed`, `failed`, or `timedOut`. The server parses Playwright progress markers such as `[528/662]` from stdout and discards raw stdout/stderr text so repeated polling stays token-efficient. The server allows one active tracked run per working directory, caps active tracked runs globally, and keeps a bounded history of recent terminal runs, so very old `runId` values can expire.
 
 ### `get_run_status`
 
@@ -192,7 +192,7 @@ Returns the current status for a non-blocking run started by `run_tests` with `w
 
 If both fields are omitted, `workingDirectory` defaults to `"."`. If no run is tracked for the resolved directory, the tool returns `state: "idle"` plus `results.json` metadata and last parsed stats when readable. It does not process-scan for external `npx playwright test` commands that were not started through this MCP server.
 
-Returns: run state, tracking flag, pid, timestamps, elapsed duration, timeout, command metadata, stdout/stderr tails, exit code, signal, spawn/timeout error when present, `results.json` path/existence/mtime/size/freshness, and parsed report stats when the report was updated after the run started.
+Returns: run state, tracking flag, pid, timestamps, elapsed duration, timeout, command metadata, `progress: { current, total }`, exit code, signal, spawn/timeout error when present, `results.json` path/existence/mtime/size/freshness, and parsed report stats when the report was updated after the run started. When progress has not appeared yet, `current` and `total` are `null`; when a terminal run has readable final stats, progress is set to the derived completed total.
 
 ### `get_failed_tests`
 

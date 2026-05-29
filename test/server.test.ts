@@ -366,6 +366,9 @@ describe('run_tests — non-blocking status polling', () => {
     expect(data.runId).toMatch(/^run-/);
     expect(data.state).toBe('running');
     expect(data.pid).toBe(4321);
+    expect(data.progress).toEqual({ current: null, total: null });
+    expect(data).not.toHaveProperty('stdoutTail');
+    expect(data).not.toHaveProperty('stderrTail');
     expect(spawnMock).toHaveBeenCalledTimes(1);
     expect(run.child.kill).not.toHaveBeenCalled();
   });
@@ -396,7 +399,48 @@ describe('run_tests — non-blocking status polling', () => {
     expect(status.resultsFile.updatedAfterStart).toBe(false);
     expect(status.resultsFile.mtimeMs).toEqual(expect.any(Number));
     expect(status.stats).toBeNull();
+    expect(status.progress).toEqual({ current: null, total: null });
+    expect(status).not.toHaveProperty('stdoutTail');
+    expect(status).not.toHaveProperty('stderrTail');
     expect(status.elapsedMs).toEqual(expect.any(Number));
+  });
+
+  it('reports compact numeric progress parsed from Playwright stdout', async () => {
+    const run = mockNextSpawn(createSpawnControl(1357));
+    const started = parseResult(
+      await client.callTool({ name: 'run_tests', arguments: { wait: false } })
+    );
+
+    run.child.stdout.write('Running 662 tests using 4 workers\n');
+    run.child.stdout.write('[12/662] [Chromium] › tests/navigation.spec.ts:13:3 › / title\n');
+    run.child.stdout.write('[528/662] [Firefox] › tests/forms.spec.ts:9:1 › form works\n');
+    run.child.stderr.write('warning that should not be retained');
+
+    const status = parseResult(
+      await client.callTool({ name: 'get_run_status', arguments: { runId: started.runId } })
+    );
+
+    expect(status.progress).toEqual({ current: 528, total: 662 });
+    expect(status).not.toHaveProperty('stdoutTail');
+    expect(status).not.toHaveProperty('stderrTail');
+    expect(JSON.stringify(status)).not.toContain('warning that should not be retained');
+  });
+
+  it('parses progress markers split across stdout chunks', async () => {
+    const run = mockNextSpawn(createSpawnControl(1357));
+    const started = parseResult(
+      await client.callTool({ name: 'run_tests', arguments: { wait: false } })
+    );
+
+    run.child.stdout.write('Running 662 tests using 4 workers\n[52');
+    run.child.stdout.write('8/662] [Firefox] › tests/forms.spec.ts:9:1 › form works\n');
+
+    const status = parseResult(
+      await client.callTool({ name: 'get_run_status', arguments: { runId: started.runId } })
+    );
+
+    expect(status.progress).toEqual({ current: 528, total: 662 });
+    expect(JSON.stringify(status)).not.toContain('Running 662 tests');
   });
 
   it('reports live stats for a running run after results.json is updated', async () => {
@@ -476,7 +520,7 @@ describe('run_tests — non-blocking status polling', () => {
     expect(status.resultsFile.exists).toEqual(expect.any(Boolean));
   });
 
-  it('reports terminal failed status with stderr tail and parsed stats', async () => {
+  it('reports terminal failed status with compact progress and parsed stats', async () => {
     const run = mockNextSpawn(createSpawnControl());
     const started = parseResult(
       await client.callTool({ name: 'run_tests', arguments: { wait: false } })
@@ -495,10 +539,33 @@ describe('run_tests — non-blocking status polling', () => {
       state: 'failed',
       exitCode: 1,
       signal: null,
-      stderrTail: 'one test failed',
       stats,
+      progress: { current: 2, total: 2 },
     });
+    expect(status).not.toHaveProperty('stdoutTail');
+    expect(status).not.toHaveProperty('stderrTail');
+    expect(JSON.stringify(status)).not.toContain('one test failed');
     expect(status.completedAt).toEqual(expect.any(String));
+  });
+
+  it('includes flaky tests when deriving terminal progress from stats', async () => {
+    const flakyStats = { expected: 1, unexpected: 0, flaky: 1, skipped: 1, duration: 4000 };
+    const run = mockNextSpawn(createSpawnControl());
+    const started = parseResult(
+      await client.callTool({ name: 'run_tests', arguments: { wait: false } })
+    );
+
+    writeCustomReport({ suites, stats: flakyStats });
+    markReportUpdatedAfter(started.startedAt);
+    run.finish({ code: 0 });
+    await waitForRunEvents();
+
+    const status = parseResult(
+      await client.callTool({ name: 'get_run_status', arguments: { runId: started.runId } })
+    );
+
+    expect(status.stats).toEqual(flakyStats);
+    expect(status.progress).toEqual({ current: 3, total: 3 });
   });
 
   it('keeps report stats isolated to the run that produced them', async () => {
@@ -640,6 +707,7 @@ describe('run_tests — non-blocking status polling', () => {
   });
 
   it('reports spawn failure status', async () => {
+    deleteReport();
     const run = mockNextSpawn(createSpawnControl());
     const started = parseResult(
       await client.callTool({ name: 'run_tests', arguments: { wait: false } })
@@ -654,6 +722,9 @@ describe('run_tests — non-blocking status polling', () => {
     expect(status.state).toBe('failed');
     expect(status.error).toContain('Failed to spawn Playwright');
     expect(status.error).toContain('ENOENT');
+    expect(status.progress).toEqual({ current: null, total: null });
+    expect(status).not.toHaveProperty('stdoutTail');
+    expect(status).not.toHaveProperty('stderrTail');
   });
 
   it('reports synchronous spawn exceptions as failed tracked runs', async () => {

@@ -95,12 +95,18 @@ interface PwReport {
   stats: {
     expected: number;
     unexpected: number;
+    flaky?: number;
     skipped: number;
     duration: number;
   };
 }
 
 type TrackedRunState = 'running' | 'completed' | 'failed' | 'timedOut';
+
+interface RunProgress {
+  current: number | null;
+  total: number | null;
+}
 
 interface ResultsFileStatus {
   path: string;
@@ -120,8 +126,7 @@ interface TrackedRun {
   startedAtMs: number;
   completedAt: string | null;
   timeoutMs: number;
-  stdoutTail: string;
-  stderrTail: string;
+  progress: RunProgress;
   exitCode: number | null;
   signal: NodeJS.Signals | null;
   error: string | null;
@@ -134,7 +139,7 @@ interface TrackedRun {
 const MAX_ACTIVE_RUNS = 4;
 const MAX_TRACKED_RUNS = 50;
 const KILL_ESCALATION_MS = 5_000;
-const RUN_TAIL_LIMIT = 20_000;
+const PROGRESS_CARRY_LIMIT = 64;
 const runs = new Map<string, TrackedRun>();
 
 /**
@@ -241,11 +246,6 @@ function runPlaywright(cmd: string[], cwd: string, timeoutMs: number) {
   });
 }
 
-function appendLimited(current: string, chunk: string, limit: number): string {
-  const combined = current + chunk;
-  return combined.length > limit ? combined.slice(combined.length - limit) : combined;
-}
-
 function nextStableRunId(): string {
   return `run-${randomUUID()}`;
 }
@@ -314,6 +314,28 @@ function captureRunReport(run: TrackedRun) {
     : null;
 }
 
+function emptyProgress(): RunProgress {
+  return { current: null, total: null };
+}
+
+function parseProgress(text: string): RunProgress | null {
+  const matches = Array.from(text.matchAll(/\[(\d+)\/(\d+)\]/g));
+  const last = matches.at(-1);
+  if (!last) return null;
+  return { current: Number(last[1]), total: Number(last[2]) };
+}
+
+function applyProgress(run: TrackedRun, chunk: unknown) {
+  const parsed = parseProgress(String(chunk));
+  if (parsed) run.progress = parsed;
+}
+
+function terminalProgressFromStats(stats: PwReport['stats'] | null): RunProgress | null {
+  if (!stats) return null;
+  const total = stats.expected + stats.unexpected + (stats.flaky ?? 0) + stats.skipped;
+  return { current: total, total };
+}
+
 function signalProcessTree(child: ReturnType<typeof spawn>, signal: NodeJS.Signals) {
   if (child.pid && process.platform !== 'win32') {
     try {
@@ -338,8 +360,7 @@ function startTrackedRun(cmd: string[], cwd: string, timeoutMs: number): Tracked
     startedAtMs: now,
     completedAt: null,
     timeoutMs,
-    stdoutTail: '',
-    stderrTail: '',
+    progress: emptyProgress(),
     exitCode: null,
     signal: null,
     error: null,
@@ -354,6 +375,7 @@ function startTrackedRun(cmd: string[], cwd: string, timeoutMs: number): Tracked
   let child: ReturnType<typeof spawn>;
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   let killEscalationHandle: ReturnType<typeof setTimeout> | null = null;
+  let stdoutProgressCarry = '';
 
   const complete = () => {
     if (settled) return;
@@ -362,16 +384,6 @@ function startTrackedRun(cmd: string[], cwd: string, timeoutMs: number): Tracked
     if (killEscalationHandle && !timedOut) clearTimeout(killEscalationHandle);
     run.completedAt = new Date().toISOString();
     evictOldTrackedRuns();
-  };
-
-  const appendStdout = (chunk: unknown) => {
-    const text = String(chunk);
-    run.stdoutTail = appendLimited(run.stdoutTail, text, RUN_TAIL_LIMIT);
-  };
-
-  const appendStderr = (chunk: unknown) => {
-    const text = String(chunk);
-    run.stderrTail = appendLimited(run.stderrTail, text, RUN_TAIL_LIMIT);
   };
 
   try {
@@ -389,8 +401,12 @@ function startTrackedRun(cmd: string[], cwd: string, timeoutMs: number): Tracked
   }
 
   run.pid = child.pid ?? null;
-  child.stdout?.on('data', appendStdout);
-  child.stderr?.on('data', appendStderr);
+  child.stdout?.on('data', (chunk) => {
+    const text = stdoutProgressCarry + String(chunk);
+    applyProgress(run, text);
+    stdoutProgressCarry = text.slice(-PROGRESS_CARRY_LIMIT);
+  });
+  child.stderr?.resume();
   child.once('error', (e) => {
     if (timedOut) {
       run.state = 'timedOut';
@@ -468,8 +484,8 @@ function runStatus(run: TrackedRun) {
       args: run.cmd.slice(1),
       cwd: run.cwd,
     },
-    stdoutTail: run.stdoutTail,
-    stderrTail: run.stderrTail,
+    progress:
+      run.completedAt === null ? run.progress : (terminalProgressFromStats(stats) ?? run.progress),
     exitCode: run.exitCode,
     signal: run.signal,
     error: run.error,
@@ -489,8 +505,7 @@ function idleStatus(cwd: string) {
     elapsedMs: 0,
     timeoutMs: null,
     command: null,
-    stdoutTail: '',
-    stderrTail: '',
+    progress: emptyProgress(),
     exitCode: null,
     signal: null,
     error: null,
