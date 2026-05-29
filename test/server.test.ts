@@ -1,9 +1,11 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { EventEmitter } from 'events';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { PassThrough } from 'stream';
 import { fileURLToPath } from 'url';
 import pkg from '../package.json' with { type: 'json' };
 import { stats, suites } from './fixtures/data.js';
@@ -12,11 +14,12 @@ vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
   return {
     ...actual,
+    spawn: vi.fn(),
     spawnSync: vi.fn(() => ({ status: 0, stdout: '', stderr: '' })),
   };
 });
 
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import {
   ALLOWED_DIRS,
   buildListTestsCmd,
@@ -29,6 +32,56 @@ import {
 } from '../index.js';
 
 const spawnSyncMock = spawnSync as unknown as ReturnType<typeof vi.fn>;
+const spawnMock = spawn as unknown as ReturnType<typeof vi.fn>;
+
+type SpawnControl = {
+  child: EventEmitter & {
+    pid?: number;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  fail: (error: Error) => void;
+  finish: (result?: {
+    code?: number | null;
+    signal?: NodeJS.Signals | null;
+    stdout?: string;
+    stderr?: string;
+  }) => void;
+};
+
+function createSpawnControl(pid = 4321): SpawnControl {
+  const child = new EventEmitter() as SpawnControl['child'];
+  child.pid = pid;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+
+  let closed = false;
+  const finish: SpawnControl['finish'] = (result = {}) => {
+    if (closed) return;
+    closed = true;
+    if (result.stdout) child.stdout.write(result.stdout);
+    if (result.stderr) child.stderr.write(result.stderr);
+    child.stdout.end();
+    child.stderr.end();
+    child.emit('close', result.code ?? 0, result.signal ?? null);
+  };
+
+  child.kill = vi.fn((signal: NodeJS.Signals = 'SIGTERM') => {
+    finish({ code: null, signal });
+    return true;
+  });
+
+  return {
+    child,
+    fail: (error: Error) => child.emit('error', error),
+    finish,
+  };
+}
+
+function waitForRunEvents() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 const resultsDir = fileURLToPath(new URL('./fixtures/test-results', import.meta.url));
 const resultsFile = join(resultsDir, 'results.json');
@@ -211,6 +264,186 @@ describe('run_tests — timeout', () => {
     expect(result.isError).toBe(true);
     const text = (result.content as TextContent[])[0].text;
     expect(text).toContain('exceeded the 300000ms timeout');
+  });
+});
+
+describe('run_tests — non-blocking status polling', () => {
+  beforeEach(() => {
+    spawnMock.mockReset();
+  });
+
+  afterEach(() => {
+    writeDefaultReport();
+  });
+
+  it('starts a run without waiting and returns a stable runId', async () => {
+    const run = createSpawnControl();
+    spawnMock.mockReturnValueOnce(run.child);
+
+    const data = parseResult(
+      await client.callTool({ name: 'run_tests', arguments: { wait: false } })
+    );
+
+    expect(data.runId).toMatch(/^run-/);
+    expect(data.state).toBe('running');
+    expect(data.pid).toBe(4321);
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(run.child.kill).not.toHaveBeenCalled();
+  });
+
+  it('reports the status of an active run with command metadata and results.json state', async () => {
+    writeDefaultReport();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const run = createSpawnControl(9876);
+    spawnMock.mockReturnValueOnce(run.child);
+    const started = parseResult(
+      await client.callTool({ name: 'run_tests', arguments: { wait: false, tag: '@smoke' } })
+    );
+
+    const status = parseResult(
+      await client.callTool({ name: 'get_run_status', arguments: { runId: started.runId } })
+    );
+
+    expect(status).toMatchObject({
+      runId: started.runId,
+      state: 'running',
+      pid: 9876,
+      exitCode: null,
+      signal: null,
+      error: null,
+    });
+    expect(status.command.args).toContain('--grep');
+    expect(status.command.args).toContain('@smoke');
+    expect(status.resultsFile.exists).toBe(true);
+    expect(status.resultsFile.updatedAfterStart).toBe(false);
+    expect(status.resultsFile.mtimeMs).toEqual(expect.any(Number));
+    expect(status.stats).toBeNull();
+    expect(status.elapsedMs).toEqual(expect.any(Number));
+  });
+
+  it('uses the latest tracked run for the working directory when runId is omitted', async () => {
+    const run = createSpawnControl(2468);
+    spawnMock.mockReturnValueOnce(run.child);
+    const started = parseResult(
+      await client.callTool({ name: 'run_tests', arguments: { wait: false } })
+    );
+
+    const status = parseResult(await client.callTool({ name: 'get_run_status', arguments: {} }));
+
+    expect(status.runId).toBe(started.runId);
+    expect(status.state).toBe('running');
+    expect(status.pid).toBe(2468);
+  });
+
+  it('returns idle status when runId is omitted and no run is tracked for the working directory', async () => {
+    const status = parseResult(
+      await client.callTool({
+        name: 'get_run_status',
+        arguments: { workingDirectory: 'test/fixtures/pw-project' },
+      })
+    );
+
+    expect(status).toMatchObject({
+      runId: null,
+      state: 'idle',
+      tracking: false,
+      pid: null,
+      command: null,
+      exitCode: null,
+      signal: null,
+      error: null,
+    });
+    expect(status.resultsFile.exists).toEqual(expect.any(Boolean));
+  });
+
+  it('reports terminal failed status with stderr tail and parsed stats', async () => {
+    const run = createSpawnControl();
+    spawnMock.mockReturnValueOnce(run.child);
+    const started = parseResult(
+      await client.callTool({ name: 'run_tests', arguments: { wait: false } })
+    );
+
+    writeDefaultReport();
+    run.finish({ code: 1, stderr: 'one test failed' });
+    await waitForRunEvents();
+
+    const status = parseResult(
+      await client.callTool({ name: 'get_run_status', arguments: { runId: started.runId } })
+    );
+    expect(status).toMatchObject({
+      runId: started.runId,
+      state: 'failed',
+      exitCode: 1,
+      signal: null,
+      stderrTail: 'one test failed',
+      stats,
+    });
+    expect(status.completedAt).toEqual(expect.any(String));
+  });
+
+  it('reports timeout status after killing a long-running process', async () => {
+    const run = createSpawnControl();
+    spawnMock.mockReturnValueOnce(run.child);
+    const started = parseResult(
+      await client.callTool({ name: 'run_tests', arguments: { wait: false, timeout: 1 } })
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const status = parseResult(
+      await client.callTool({ name: 'get_run_status', arguments: { runId: started.runId } })
+    );
+    expect(status.state).toBe('timedOut');
+    expect(status.signal).toBe('SIGTERM');
+    expect(status.error).toContain('exceeded the 1ms timeout');
+    expect(run.child.kill).toHaveBeenCalledWith('SIGTERM');
+  });
+
+  it('reports spawn failure status', async () => {
+    const run = createSpawnControl();
+    spawnMock.mockReturnValueOnce(run.child);
+    const started = parseResult(
+      await client.callTool({ name: 'run_tests', arguments: { wait: false } })
+    );
+
+    run.fail(new Error('ENOENT'));
+    await waitForRunEvents();
+
+    const status = parseResult(
+      await client.callTool({ name: 'get_run_status', arguments: { runId: started.runId } })
+    );
+    expect(status.state).toBe('failed');
+    expect(status.error).toContain('Failed to spawn Playwright');
+    expect(status.error).toContain('ENOENT');
+  });
+
+  it('reports a completed run with missing results.json without reading stale data', async () => {
+    deleteReport();
+    const run = createSpawnControl();
+    spawnMock.mockReturnValueOnce(run.child);
+    const started = parseResult(
+      await client.callTool({ name: 'run_tests', arguments: { wait: false } })
+    );
+
+    run.finish({ code: 0 });
+    await waitForRunEvents();
+
+    const status = parseResult(
+      await client.callTool({ name: 'get_run_status', arguments: { runId: started.runId } })
+    );
+    expect(status.state).toBe('completed');
+    expect(status.resultsFile.exists).toBe(false);
+    expect(status.resultsFile.mtimeMs).toBeNull();
+    expect(status.stats).toBeNull();
+  });
+
+  it('returns a structured error for an unknown runId', async () => {
+    const result = await client.callTool({
+      name: 'get_run_status',
+      arguments: { runId: 'run-does-not-exist' },
+    });
+    expect(result.isError).toBe(true);
+    expect((result.content as TextContent[])[0].text).toContain('Unknown runId');
   });
 });
 

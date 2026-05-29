@@ -156,7 +156,7 @@ Tested with **Claude Code (CLI)**. Should work with any MCP-compatible client th
 
 ## Tools
 
-All four tools accept an optional `workingDirectory` parameter — see [Multi-worktree support](#multi-worktree-support).
+The project-scoped tools accept an optional `workingDirectory` parameter — see [Multi-worktree support](#multi-worktree-support). `get_run_status` can use either a `runId` from `run_tests` with `wait: false`, or a `workingDirectory` lookup for the latest tracked run.
 
 ### `run_tests`
 
@@ -169,6 +169,7 @@ Runs the Playwright test suite and returns structured pass/fail results.
 | `browser`          | enum (optional)    | `Chromium`, `Firefox`, `Webkit`, `Mobile Chrome`, `Mobile Safari`                                                                                                                                                                                               |
 | `tag`              | string (optional)  | Tag filter, e.g. `@smoke`                                                                                                                                                                                                                                       |
 | `timeout`          | integer (optional) | Timeout in milliseconds for the whole test run. Defaults to `300000` (5 min). Use a larger value for long suites or a smaller one to fail fast. When the run is killed by this timeout, the tool returns an explicit error rather than a generic non-zero exit. |
+| `wait`             | boolean (optional) | Wait for completion before returning. Defaults to `true`. Set to `false` to start a background run and poll it with `get_run_status`.                                                                                                                           |
 | `updateSnapshots`  | enum (optional)    | Update snapshot baselines. One of `all`, `changed`, `missing`, `none`. Playwright's default is `missing`; `changed` updates differing + missing. Omit to leave existing baselines alone.                                                                        |
 | `headed`           | boolean (optional) | Run with a visible browser window. Omitting or setting `false` leaves `playwright.config.ts` intact — Playwright has no `--no-headed` flag, so `false` does not force headless when the config sets headed.                                                     |
 | `workers`          | integer (optional) | Number of parallel workers. Positive integer only; the `"50%"` string form is not yet supported.                                                                                                                                                                |
@@ -177,6 +178,21 @@ Runs the Playwright test suite and returns structured pass/fail results.
 | `trace`            | enum (optional)    | Force Playwright tracing mode, overriding `playwright.config.ts`. One of `on`, `off`, `on-first-retry`, `on-all-retries`, `retain-on-failure`, `retain-on-first-failure`, `retain-on-failure-and-retries`.                                                      |
 
 Returns: exit code, run stats, and a summary of all tests with status, duration, and error per project.
+
+When `wait` is `false`, returns immediately with `runId`, process metadata, output tails, and current `results.json` status. Poll `get_run_status` with that `runId` until `state` is `completed`, `failed`, or `timedOut`.
+
+### `get_run_status`
+
+Returns the current status for a non-blocking run started by `run_tests` with `wait: false`.
+
+| Input              | Type              | Description                                                                                                  |
+| ------------------ | ----------------- | ------------------------------------------------------------------------------------------------------------ |
+| `runId`            | string (optional) | Run identifier returned by `run_tests wait=false`. When present, this selects a specific tracked run.        |
+| `workingDirectory` | string (optional) | Used only when `runId` is omitted. Returns the latest tracked run for that directory, or `idle` if no match. |
+
+If both fields are omitted, `workingDirectory` defaults to `"."`. If no run is tracked for the resolved directory, the tool returns `state: "idle"` plus `results.json` metadata and last parsed stats when readable. It does not process-scan for external `npx playwright test` commands that were not started through this MCP server.
+
+Returns: run state, tracking flag, pid, timestamps, elapsed duration, timeout, command metadata, stdout/stderr tails, exit code, signal, spawn/timeout error when present, `results.json` path/existence/mtime/size/freshness, and parsed report stats when the report was updated after the run started.
 
 ### `get_failed_tests`
 
@@ -268,7 +284,7 @@ Set `PW_RESULTS_FILE` if your `playwright.config.ts` writes the report to a non-
 
 ### Multi-worktree support
 
-`run_tests`, `list_tests`, `get_failed_tests`, and `get_test_attachment` all accept an optional `workingDirectory` parameter — absolute, or relative to the MCP server's launch directory. This lets a single long-lived MCP session drive tests across multiple git worktrees without restarting.
+`run_tests`, `list_tests`, `get_failed_tests`, and `get_test_attachment` all accept an optional `workingDirectory` parameter — absolute, or relative to the MCP server's launch directory. `get_run_status` also accepts `workingDirectory` when `runId` is omitted; when `runId` is supplied, the run already records the resolved working directory. This lets a single long-lived MCP session drive tests across multiple git worktrees without restarting.
 
 Because a Playwright config is a Node module that executes on `playwright test` startup, the server guards the parameter with an allowlist. Callers that point `workingDirectory` at a directory outside `PW_ALLOWED_DIRS` get a structured error and no child process is spawned.
 

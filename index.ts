@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { readFileSync, realpathSync, statSync } from 'fs';
 import { delimiter, dirname, isAbsolute, join, relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
@@ -99,7 +99,33 @@ interface PwReport {
   };
 }
 
+type RunState = 'idle' | 'running' | 'completed' | 'failed' | 'timedOut';
+
+interface TrackedRun {
+  id: string;
+  cwd: string;
+  cmd: string[];
+  pid: number | null;
+  state: RunState;
+  startedAt: string;
+  startedAtMs: number;
+  completedAt: string | null;
+  timeoutMs: number;
+  stdoutTail: string;
+  stderrTail: string;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  error: string | null;
+}
+
 // ---------- helpers ----------
+
+const RUN_OUTPUT_LIMIT = 10 * 1024 * 1024;
+const RUN_TAIL_LIMIT = 20_000;
+const runs = new Map<string, TrackedRun>();
+let nextRunId = 0;
 
 /**
  * Segment-level containment check. Returns true when `child` equals `parent`
@@ -203,6 +229,196 @@ function runPlaywright(cmd: string[], cwd: string, timeoutMs: number) {
     timeout: timeoutMs,
     maxBuffer: 10 * 1024 * 1024,
   });
+}
+
+function appendLimited(current: string, chunk: string, limit: number): string {
+  const combined = current + chunk;
+  return combined.length > limit ? combined.slice(combined.length - limit) : combined;
+}
+
+function nextStableRunId(): string {
+  return `run-${Date.now()}-${++nextRunId}`;
+}
+
+function summarizeReport(report: PwReport, exitCode: number) {
+  const specs = collectSpecs(report.suites);
+  const summary = specs.map(({ spec: s, file }) => ({
+    title: s.title,
+    file,
+    ok: s.ok,
+    // results.at(-1) = final retry attempt — authoritative outcome when Playwright retries are configured
+    results: s.tests.map((t) => {
+      const last = t.results.at(-1);
+      return {
+        project: t.projectName,
+        status: last?.status ?? 'unknown',
+        duration: last?.duration ?? 0,
+        error: last?.error?.message ?? null,
+      };
+    }),
+  }));
+
+  return { exitCode, stats: report.stats, tests: summary };
+}
+
+function startTrackedRun(cmd: string[], cwd: string, timeoutMs: number): TrackedRun {
+  const now = Date.now();
+  const run: TrackedRun = {
+    id: nextStableRunId(),
+    cwd,
+    cmd,
+    pid: null,
+    state: 'running',
+    startedAt: new Date(now).toISOString(),
+    startedAtMs: now,
+    completedAt: null,
+    timeoutMs,
+    stdoutTail: '',
+    stderrTail: '',
+    stdout: '',
+    stderr: '',
+    exitCode: null,
+    signal: null,
+    error: null,
+  };
+  runs.set(run.id, run);
+
+  let settled = false;
+  let child: ReturnType<typeof spawn>;
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+  const complete = () => {
+    if (settled) return;
+    settled = true;
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    run.completedAt = new Date().toISOString();
+  };
+
+  const appendStdout = (chunk: unknown) => {
+    const text = String(chunk);
+    run.stdout = appendLimited(run.stdout, text, RUN_OUTPUT_LIMIT);
+    run.stdoutTail = appendLimited(run.stdoutTail, text, RUN_TAIL_LIMIT);
+  };
+
+  const appendStderr = (chunk: unknown) => {
+    const text = String(chunk);
+    run.stderr = appendLimited(run.stderr, text, RUN_OUTPUT_LIMIT);
+    run.stderrTail = appendLimited(run.stderrTail, text, RUN_TAIL_LIMIT);
+  };
+
+  try {
+    child = spawn(cmd[0], cmd.slice(1), {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (e) {
+    run.state = 'failed';
+    run.error = `Failed to spawn Playwright: ${(e as Error).message}`;
+    complete();
+    return run;
+  }
+
+  run.pid = child.pid ?? null;
+  child.stdout?.on('data', appendStdout);
+  child.stderr?.on('data', appendStderr);
+  child.once('error', (e) => {
+    if (run.state !== 'timedOut') {
+      run.state = 'failed';
+      run.error = `Failed to spawn Playwright: ${(e as Error).message}`;
+    }
+    complete();
+  });
+  child.once('close', (code, signal) => {
+    run.exitCode = code;
+    run.signal = signal;
+    if (run.state !== 'timedOut') {
+      run.state = code === 0 ? 'completed' : 'failed';
+    }
+    complete();
+  });
+
+  timeoutHandle = setTimeout(() => {
+    if (settled) return;
+    run.state = 'timedOut';
+    run.error = `Playwright test run exceeded the ${timeoutMs}ms timeout and was killed.`;
+    child.kill('SIGTERM');
+  }, timeoutMs);
+
+  return run;
+}
+
+function resultsFileStatus(dir: string, startedAtMs?: number) {
+  const resultsPath = resultsFileFor(dir);
+  const st = statSync(resultsPath, { throwIfNoEntry: false });
+  const updatedAfterStart =
+    startedAtMs === undefined ? null : Boolean(st && st.mtimeMs >= startedAtMs);
+
+  return {
+    path: resultsPath,
+    exists: Boolean(st),
+    mtimeMs: st?.mtimeMs ?? null,
+    size: st?.size ?? null,
+    updatedAfterStart,
+  };
+}
+
+function runStatus(run: TrackedRun) {
+  const resultsFile = resultsFileStatus(run.cwd, run.startedAtMs);
+  const endedAtMs = run.completedAt ? Date.parse(run.completedAt) : Date.now();
+  const report = resultsFile.updatedAfterStart ? readLastReport(run.cwd) : null;
+
+  return {
+    runId: run.id,
+    state: run.state,
+    tracking: true,
+    pid: run.pid,
+    startedAt: run.startedAt,
+    completedAt: run.completedAt,
+    elapsedMs: Math.max(0, endedAtMs - run.startedAtMs),
+    timeoutMs: run.timeoutMs,
+    command: {
+      executable: run.cmd[0],
+      args: run.cmd.slice(1),
+      cwd: run.cwd,
+    },
+    stdoutTail: run.stdoutTail,
+    stderrTail: run.stderrTail,
+    exitCode: run.exitCode,
+    signal: run.signal,
+    error: run.error,
+    resultsFile,
+    stats: report?.stats ?? null,
+  };
+}
+
+function idleStatus(cwd: string) {
+  return {
+    runId: null,
+    state: 'idle' as const,
+    tracking: false,
+    pid: null,
+    startedAt: null,
+    completedAt: null,
+    elapsedMs: 0,
+    timeoutMs: null,
+    command: null,
+    stdoutTail: '',
+    stderrTail: '',
+    exitCode: null,
+    signal: null,
+    error: null,
+    resultsFile: resultsFileStatus(cwd),
+    stats: readLastReport(cwd)?.stats ?? null,
+  };
+}
+
+function latestRunForDir(cwd: string): TrackedRun | null {
+  let latest: TrackedRun | null = null;
+  for (const run of runs.values()) {
+    if (run.cwd !== cwd) continue;
+    if (!latest || run.startedAtMs > latest.startedAtMs) latest = run;
+  }
+  return latest;
 }
 
 function buildListTestsCmd(tag?: string): string[] {
@@ -326,6 +542,12 @@ server.registerTool(
         .positive()
         .optional()
         .describe('Timeout in milliseconds for the whole test run. Defaults to 300000.'),
+      wait: z
+        .boolean()
+        .optional()
+        .describe(
+          'Wait for completion before returning. Defaults to true. Set false to start a background run and poll it with get_run_status.'
+        ),
       updateSnapshots: z
         .enum(['all', 'changed', 'missing', 'none'])
         .optional()
@@ -376,6 +598,7 @@ server.registerTool(
     browser,
     tag,
     timeout,
+    wait,
     updateSnapshots,
     headed,
     workers,
@@ -402,6 +625,11 @@ server.registerTool(
     if (trace) cmd.push('--trace', trace);
 
     const effectiveTimeout = timeout ?? 300_000;
+    if (wait === false) {
+      const run = startTrackedRun(cmd, wd.dir, effectiveTimeout);
+      return ok(runStatus(run));
+    }
+
     const result = runPlaywright(cmd, wd.dir, effectiveTimeout);
 
     if (result.error) {
@@ -420,24 +648,35 @@ server.registerTool(
         `Test run completed but results.json was not found.\nstderr: ${result.stderr ?? ''}`
       );
 
-    const specs = collectSpecs(report.suites);
-    const summary = specs.map(({ spec: s, file }) => ({
-      title: s.title,
-      file,
-      ok: s.ok,
-      // results.at(-1) = final retry attempt — authoritative outcome when Playwright retries are configured
-      results: s.tests.map((t) => {
-        const last = t.results.at(-1);
-        return {
-          project: t.projectName,
-          status: last?.status ?? 'unknown',
-          duration: last?.duration ?? 0,
-          error: last?.error?.message ?? null,
-        };
-      }),
-    }));
+    return ok(summarizeReport(report, result.status ?? -1));
+  }
+);
 
-    return ok({ exitCode: result.status ?? -1, stats: report.stats, tests: summary });
+server.registerTool(
+  'get_run_status',
+  {
+    description:
+      'Return status for a Playwright run. Pass runId for a specific background run, or omit it to inspect the latest tracked run for a workingDirectory.',
+    inputSchema: {
+      workingDirectory: workingDirectoryField,
+      runId: z
+        .string()
+        .optional()
+        .describe('Run identifier returned by run_tests with wait=false.'),
+    },
+  },
+  async ({ workingDirectory, runId }) => {
+    if (runId) {
+      const run = runs.get(runId);
+      if (!run) return err(`Unknown runId: ${runId}`);
+      return ok(runStatus(run));
+    }
+
+    const wd = resolveWorkingDir(workingDirectory);
+    if ('error' in wd) return err(wd.error);
+
+    const run = latestRunForDir(wd.dir);
+    return ok(run ? runStatus(run) : idleStatus(wd.dir));
   }
 );
 
