@@ -512,6 +512,7 @@ describe('run_tests — non-blocking status polling', () => {
     writeCustomReport({ suites, stats: firstStats });
     markReportUpdatedAfter(firstStarted.startedAt);
     first.finish({ code: 0 });
+    await waitForRunEvents();
 
     const second = mockNextSpawn(createSpawnControl(2222));
     const secondStarted = parseResult(
@@ -520,6 +521,7 @@ describe('run_tests — non-blocking status polling', () => {
     writeCustomReport({ suites, stats: secondStats });
     markReportUpdatedAfter(secondStarted.startedAt);
     second.finish({ code: 0 });
+    await waitForRunEvents();
 
     const firstStatus = parseResult(
       await client.callTool({ name: 'get_run_status', arguments: { runId: firstStarted.runId } })
@@ -819,6 +821,7 @@ describe('run_tests — non-blocking status polling', () => {
       if (i === 0) firstRunId = started.runId;
       lastRunId = started.runId;
       run.finish({ code: 0 });
+      await waitForRunEvents();
     }
 
     const result = await client.callTool({
