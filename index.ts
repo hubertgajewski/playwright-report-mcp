@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
+import { randomUUID } from 'crypto';
 import { readFileSync, realpathSync, statSync } from 'fs';
 import { delimiter, dirname, isAbsolute, join, relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
@@ -99,7 +100,42 @@ interface PwReport {
   };
 }
 
+type TrackedRunState = 'running' | 'completed' | 'failed' | 'timedOut';
+
+interface ResultsFileStatus {
+  path: string;
+  exists: boolean;
+  mtimeMs: number | null;
+  size: number | null;
+  updatedAfterStart: boolean | null;
+}
+
+interface TrackedRun {
+  id: string;
+  cwd: string;
+  cmd: string[];
+  pid: number | null;
+  state: TrackedRunState;
+  startedAt: string;
+  startedAtMs: number;
+  completedAt: string | null;
+  timeoutMs: number;
+  stdoutTail: string;
+  stderrTail: string;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  error: string | null;
+  resultsFile: ResultsFileStatus | null;
+  reportStats: PwReport['stats'] | null;
+}
+
 // ---------- helpers ----------
+
+const MAX_ACTIVE_RUNS = 4;
+const MAX_TRACKED_RUNS = 50;
+const KILL_ESCALATION_MS = 5_000;
+const RUN_TAIL_LIMIT = 20_000;
+const runs = new Map<string, TrackedRun>();
 
 /**
  * Segment-level containment check. Returns true when `child` equals `parent`
@@ -203,6 +239,273 @@ function runPlaywright(cmd: string[], cwd: string, timeoutMs: number) {
     timeout: timeoutMs,
     maxBuffer: 10 * 1024 * 1024,
   });
+}
+
+function appendLimited(current: string, chunk: string, limit: number): string {
+  const combined = current + chunk;
+  return combined.length > limit ? combined.slice(combined.length - limit) : combined;
+}
+
+function nextStableRunId(): string {
+  return `run-${randomUUID()}`;
+}
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+function activeRuns(): TrackedRun[] {
+  return Array.from(runs.values()).filter((run) => run.completedAt === null);
+}
+
+function startRunError(cwd: string): string | null {
+  const active = activeRuns();
+  const activeForDir = active.find((run) => run.cwd === cwd);
+  if (activeForDir) {
+    return (
+      `A Playwright run is already running for workingDirectory "${cwd}" ` +
+      `(runId: ${activeForDir.id}). Poll get_run_status before starting another run there.`
+    );
+  }
+
+  const activeCount = active.length;
+  if (activeCount >= MAX_ACTIVE_RUNS) {
+    return (
+      `Too many active Playwright runs (${activeCount}). ` +
+      `Wait for one to finish before starting another tracked run.`
+    );
+  }
+
+  return null;
+}
+
+function evictOldTrackedRuns() {
+  for (const run of runs.values()) {
+    if (runs.size <= MAX_TRACKED_RUNS) return;
+    if (run.completedAt !== null) runs.delete(run.id);
+  }
+}
+
+function summarizeReport(report: PwReport, exitCode: number) {
+  const specs = collectSpecs(report.suites);
+  const summary = specs.map(({ spec: s, file }) => ({
+    title: s.title,
+    file,
+    ok: s.ok,
+    // results.at(-1) = final retry attempt — authoritative outcome when Playwright retries are configured
+    results: s.tests.map((t) => {
+      const last = t.results.at(-1);
+      return {
+        project: t.projectName,
+        status: last?.status ?? 'unknown',
+        duration: last?.duration ?? 0,
+        error: last?.error?.message ?? null,
+      };
+    }),
+  }));
+
+  return { exitCode, stats: report.stats, tests: summary };
+}
+
+function captureRunReport(run: TrackedRun) {
+  run.resultsFile = resultsFileStatus(run.cwd, run.startedAtMs);
+  run.reportStats = run.resultsFile.updatedAfterStart
+    ? (readLastReport(run.cwd)?.stats ?? null)
+    : null;
+}
+
+function signalProcessTree(child: ReturnType<typeof spawn>, signal: NodeJS.Signals) {
+  if (child.pid && process.platform !== 'win32') {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // Fall back to signaling the direct child when process-group signaling is unavailable.
+    }
+  }
+  child.kill(signal);
+}
+
+function startTrackedRun(cmd: string[], cwd: string, timeoutMs: number): TrackedRun {
+  const now = Date.now();
+  const run: TrackedRun = {
+    id: nextStableRunId(),
+    cwd,
+    cmd,
+    pid: null,
+    state: 'running',
+    startedAt: new Date(now).toISOString(),
+    startedAtMs: now,
+    completedAt: null,
+    timeoutMs,
+    stdoutTail: '',
+    stderrTail: '',
+    exitCode: null,
+    signal: null,
+    error: null,
+    resultsFile: null,
+    reportStats: null,
+  };
+  runs.set(run.id, run);
+  evictOldTrackedRuns();
+
+  let settled = false;
+  let timedOut = false;
+  let child: ReturnType<typeof spawn>;
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  let killEscalationHandle: ReturnType<typeof setTimeout> | null = null;
+
+  const complete = () => {
+    if (settled) return;
+    settled = true;
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    if (killEscalationHandle && !timedOut) clearTimeout(killEscalationHandle);
+    run.completedAt = new Date().toISOString();
+    evictOldTrackedRuns();
+  };
+
+  const appendStdout = (chunk: unknown) => {
+    const text = String(chunk);
+    run.stdoutTail = appendLimited(run.stdoutTail, text, RUN_TAIL_LIMIT);
+  };
+
+  const appendStderr = (chunk: unknown) => {
+    const text = String(chunk);
+    run.stderrTail = appendLimited(run.stderrTail, text, RUN_TAIL_LIMIT);
+  };
+
+  try {
+    child = spawn(cmd[0], cmd.slice(1), {
+      cwd,
+      detached: process.platform !== 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (e) {
+    run.state = 'failed';
+    run.error = `Failed to spawn Playwright: ${errorMessage(e)}`;
+    captureRunReport(run);
+    complete();
+    return run;
+  }
+
+  run.pid = child.pid ?? null;
+  child.stdout?.on('data', appendStdout);
+  child.stderr?.on('data', appendStderr);
+  child.once('error', (e) => {
+    if (timedOut) {
+      run.state = 'timedOut';
+    } else {
+      run.state = 'failed';
+      run.error = `Failed to spawn Playwright: ${errorMessage(e)}`;
+    }
+    captureRunReport(run);
+    complete();
+  });
+  child.once('close', (code, signal) => {
+    if (!settled) {
+      run.exitCode = code;
+      if (signal !== null) run.signal = signal;
+    }
+    if (!settled) {
+      run.state = timedOut ? 'timedOut' : code === 0 ? 'completed' : 'failed';
+    }
+    if (!settled) captureRunReport(run);
+    complete();
+  });
+
+  timeoutHandle = setTimeout(() => {
+    if (settled) return;
+    timedOut = true;
+    run.error = `Playwright test run exceeded the ${timeoutMs}ms timeout and was killed.`;
+    signalProcessTree(child, 'SIGTERM');
+    if (settled) return;
+    killEscalationHandle = setTimeout(() => {
+      if (!timedOut) return;
+      if (!settled) run.signal = 'SIGKILL';
+      signalProcessTree(child, 'SIGKILL');
+    }, KILL_ESCALATION_MS);
+    killEscalationHandle.unref?.();
+  }, timeoutMs);
+
+  return run;
+}
+
+function resultsFileStatus(dir: string, startedAtMs?: number): ResultsFileStatus {
+  const resultsPath = resultsFileFor(dir);
+  const st = statSync(resultsPath, { throwIfNoEntry: false });
+  const updatedAfterStart =
+    startedAtMs === undefined ? null : Boolean(st && st.mtimeMs >= startedAtMs);
+
+  return {
+    path: resultsPath,
+    exists: Boolean(st),
+    mtimeMs: st?.mtimeMs ?? null,
+    size: st?.size ?? null,
+    updatedAfterStart,
+  };
+}
+
+function runStatus(run: TrackedRun) {
+  const resultsFile = run.resultsFile ?? resultsFileStatus(run.cwd, run.startedAtMs);
+  const endedAtMs = run.completedAt ? Date.parse(run.completedAt) : Date.now();
+  const stats =
+    run.reportStats ??
+    (run.state === 'running' && resultsFile.updatedAfterStart
+      ? (readLastReport(run.cwd)?.stats ?? null)
+      : null);
+
+  return {
+    runId: run.id,
+    state: run.state,
+    tracking: true,
+    pid: run.pid,
+    startedAt: run.startedAt,
+    completedAt: run.completedAt,
+    elapsedMs: Math.max(0, endedAtMs - run.startedAtMs),
+    timeoutMs: run.timeoutMs,
+    command: {
+      executable: run.cmd[0],
+      args: run.cmd.slice(1),
+      cwd: run.cwd,
+    },
+    stdoutTail: run.stdoutTail,
+    stderrTail: run.stderrTail,
+    exitCode: run.exitCode,
+    signal: run.signal,
+    error: run.error,
+    resultsFile,
+    stats,
+  };
+}
+
+function idleStatus(cwd: string) {
+  return {
+    runId: null,
+    state: 'idle' as const,
+    tracking: false,
+    pid: null,
+    startedAt: null,
+    completedAt: null,
+    elapsedMs: 0,
+    timeoutMs: null,
+    command: null,
+    stdoutTail: '',
+    stderrTail: '',
+    exitCode: null,
+    signal: null,
+    error: null,
+    resultsFile: resultsFileStatus(cwd),
+    stats: readLastReport(cwd)?.stats ?? null,
+  };
+}
+
+function latestRunForDir(cwd: string): TrackedRun | null {
+  let latest: TrackedRun | null = null;
+  for (const run of runs.values()) {
+    if (run.cwd !== cwd) continue;
+    latest = run;
+  }
+  return latest;
 }
 
 function buildListTestsCmd(tag?: string): string[] {
@@ -309,6 +612,13 @@ const workingDirectoryField = z
     'Playwright project directory. Absolute or relative to the MCP server launch directory. Defaults to ".". Must be under PW_ALLOWED_DIRS.'
   );
 
+const runStatusWorkingDirectoryField = z
+  .string()
+  .optional()
+  .describe(
+    'Playwright project directory. Absolute or relative to the MCP server launch directory. Defaults to ".". Must be under PW_ALLOWED_DIRS. Used to find the latest tracked run when runId is omitted; when supplied with runId, it must resolve to that run working directory.'
+  );
+
 server.registerTool(
   'run_tests',
   {
@@ -326,6 +636,12 @@ server.registerTool(
         .positive()
         .optional()
         .describe('Timeout in milliseconds for the whole test run. Defaults to 300000.'),
+      wait: z
+        .boolean()
+        .optional()
+        .describe(
+          'Wait for completion before returning. Defaults to true. Set false to start a background run and poll it with get_run_status.'
+        ),
       updateSnapshots: z
         .enum(['all', 'changed', 'missing', 'none'])
         .optional()
@@ -376,6 +692,7 @@ server.registerTool(
     browser,
     tag,
     timeout,
+    wait,
     updateSnapshots,
     headed,
     workers,
@@ -402,6 +719,13 @@ server.registerTool(
     if (trace) cmd.push('--trace', trace);
 
     const effectiveTimeout = timeout ?? 300_000;
+    if (wait === false) {
+      const startError = startRunError(wd.dir);
+      if (startError) return err(startError);
+      const run = startTrackedRun(cmd, wd.dir, effectiveTimeout);
+      return ok(runStatus(run));
+    }
+
     const result = runPlaywright(cmd, wd.dir, effectiveTimeout);
 
     if (result.error) {
@@ -420,24 +744,44 @@ server.registerTool(
         `Test run completed but results.json was not found.\nstderr: ${result.stderr ?? ''}`
       );
 
-    const specs = collectSpecs(report.suites);
-    const summary = specs.map(({ spec: s, file }) => ({
-      title: s.title,
-      file,
-      ok: s.ok,
-      // results.at(-1) = final retry attempt — authoritative outcome when Playwright retries are configured
-      results: s.tests.map((t) => {
-        const last = t.results.at(-1);
-        return {
-          project: t.projectName,
-          status: last?.status ?? 'unknown',
-          duration: last?.duration ?? 0,
-          error: last?.error?.message ?? null,
-        };
-      }),
-    }));
+    return ok(summarizeReport(report, result.status ?? -1));
+  }
+);
 
-    return ok({ exitCode: result.status ?? -1, stats: report.stats, tests: summary });
+server.registerTool(
+  'get_run_status',
+  {
+    description:
+      'Return status for a tracked Playwright run. Pass runId for a specific background run, or omit it to inspect the latest tracked run for a workingDirectory. If no tracked run exists, returns idle with current results.json metadata; it does not inspect unrelated OS processes.',
+    inputSchema: {
+      workingDirectory: runStatusWorkingDirectoryField,
+      runId: z
+        .string()
+        .optional()
+        .describe('Run identifier returned by run_tests with wait=false.'),
+    },
+  },
+  async ({ workingDirectory, runId }) => {
+    if (runId) {
+      const run = runs.get(runId);
+      if (!run) return err(`Unknown runId: ${runId}`);
+      if (workingDirectory !== undefined) {
+        const wd = resolveWorkingDir(workingDirectory);
+        if ('error' in wd) return err(wd.error);
+        if (wd.dir !== run.cwd) {
+          return err(
+            `workingDirectory "${wd.dir}" does not match runId ${runId} workingDirectory "${run.cwd}".`
+          );
+        }
+      }
+      return ok(runStatus(run));
+    }
+
+    const wd = resolveWorkingDir(workingDirectory);
+    if ('error' in wd) return err(wd.error);
+
+    const run = latestRunForDir(wd.dir);
+    return ok(run ? runStatus(run) : idleStatus(wd.dir));
   }
 );
 
@@ -580,7 +924,7 @@ server.registerTool(
       tests = parseListJson(stdout);
     } catch (e) {
       return err(
-        `Failed to parse Playwright --list JSON output: ${(e as Error).message}\nstderr: ${result.stderr ?? ''}`
+        `Failed to parse Playwright --list JSON output: ${errorMessage(e)}\nstderr: ${result.stderr ?? ''}`
       );
     }
 
