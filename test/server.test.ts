@@ -2,7 +2,15 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { EventEmitter } from 'events';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { PassThrough } from 'stream';
@@ -146,6 +154,13 @@ function writeDefaultReport() {
 
 function writeCustomReport(report: unknown) {
   writeFileSync(resultsFile, JSON.stringify(report));
+}
+
+function markReportUpdatedAfter(startedAt: string) {
+  const startedAtMs = Date.parse(startedAt);
+  if (Number.isNaN(startedAtMs)) throw new Error(`Invalid startedAt timestamp: ${startedAt}`);
+  const updatedAt = new Date(startedAtMs + 1000);
+  utimesSync(resultsFile, updatedAt, updatedAt);
 }
 
 function deleteReport() {
@@ -468,6 +483,7 @@ describe('run_tests — non-blocking status polling', () => {
     );
 
     writeDefaultReport();
+    markReportUpdatedAfter(started.startedAt);
     run.finish({ code: 1, stderr: 'one test failed' });
     await waitForRunEvents();
 
@@ -494,6 +510,7 @@ describe('run_tests — non-blocking status polling', () => {
       await client.callTool({ name: 'run_tests', arguments: { wait: false } })
     );
     writeCustomReport({ suites, stats: firstStats });
+    markReportUpdatedAfter(firstStarted.startedAt);
     first.finish({ code: 0 });
 
     const second = mockNextSpawn(createSpawnControl(2222));
@@ -501,6 +518,7 @@ describe('run_tests — non-blocking status polling', () => {
       await client.callTool({ name: 'run_tests', arguments: { wait: false } })
     );
     writeCustomReport({ suites, stats: secondStats });
+    markReportUpdatedAfter(secondStarted.startedAt);
     second.finish({ code: 0 });
 
     const firstStatus = parseResult(
