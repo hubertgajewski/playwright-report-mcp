@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { collectSpecs } from '../index.js';
+import { collectSpecs } from '../src/results.js';
 
 type SuiteArg = Parameters<typeof collectSpecs>[0][number];
 
