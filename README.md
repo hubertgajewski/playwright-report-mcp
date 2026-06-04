@@ -366,7 +366,7 @@ npm test          # run tests once
 npm run test:watch  # watch mode
 ```
 
-Tests use [Vitest](https://vitest.dev/) and cover the `collectSpecs` helper (unit) and all MCP tools via `InMemoryTransport` (integration). No build step or Playwright installation required to run the test suite.
+Runtime code lives under `src/` and compiles to `dist/`. Tests use [Vitest](https://vitest.dev/) with focused unit coverage for helpers plus MCP tool integration coverage via `InMemoryTransport`. No build step or Playwright installation required to run the regular test suite.
 
 ---
 

@@ -4,10 +4,14 @@
   "mcpName": "io.github.hubertgajewski/playwright-report-mcp",
   "description": "MCP server for running Playwright tests and reading structured results — designed for AI agents doing test failure analysis",
   "type": "module",
-  "main": "dist/index.js",
-  "bin": "dist/index.js",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./dist/index.js": "./dist/index.js"
+  },
+  "bin": "./dist/index.js",
   "files": [
-    "dist/index.js"
+    "dist/**"
   ],
   "engines": {
     "node": ">=22"
@@ -31,7 +35,10 @@
     "url": "https://github.com/hubertgajewski/playwright-report-mcp/issues"
   },
   "scripts": {
-    "build": "tsc",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "chmod-bin": "node -e \"require('node:fs').chmodSync('dist/index.js', 0o755)\"",
+    "build": "npm run clean && tsc && npm run chmod-bin",
+    "prepack": "npm run build",
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:e2e": "npm ci --prefix test/fixtures/pw-project && vitest run --config vitest.e2e.config.ts",
