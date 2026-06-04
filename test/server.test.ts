@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as entrypoint from '../src/index.js';
 import { client, pkg, setupMcpClient } from './helpers/mcp.js';
 
@@ -29,8 +29,9 @@ describe('server identity', () => {
   it('can be imported when the Node entrypoint argument is absent', async () => {
     const originalArgvEntry = process.argv[1];
     try {
+      vi.resetModules();
       delete process.argv[1];
-      const imported = await import('../src/index.js?missing-argv');
+      const imported: typeof entrypoint = await import('../src/index.js');
       expect(imported.createServer).toEqual(expect.any(Function));
     } finally {
       if (originalArgvEntry === undefined) {
@@ -38,6 +39,7 @@ describe('server identity', () => {
       } else {
         process.argv[1] = originalArgvEntry;
       }
+      vi.resetModules();
     }
   });
 });
