@@ -13,7 +13,7 @@ describe('server identity', () => {
   });
 
   it('preserves legacy named exports from the package entrypoint', () => {
-    expect(entrypoint.ALLOWED_DIRS).toEqual([process.cwd()]);
+    expect(entrypoint.ALLOWED_DIRS).toEqual(entrypoint.loadConfig().allowedDirs);
     expect(entrypoint.server).toEqual(expect.objectContaining({ connect: expect.any(Function) }));
     expect(entrypoint.buildListTestsCmd).toEqual(expect.any(Function));
     expect(entrypoint.collectSpecs).toEqual(expect.any(Function));
@@ -24,5 +24,20 @@ describe('server identity', () => {
     expect(entrypoint.loadPackageMeta).toEqual(expect.any(Function));
     expect(entrypoint.parseAllowedDirs).toEqual(expect.any(Function));
     expect(entrypoint.parseListJson).toEqual(expect.any(Function));
+  });
+
+  it('can be imported when the Node entrypoint argument is absent', async () => {
+    const originalArgvEntry = process.argv[1];
+    try {
+      delete process.argv[1];
+      const imported = await import('../src/index.js?missing-argv');
+      expect(imported.createServer).toEqual(expect.any(Function));
+    } finally {
+      if (originalArgvEntry === undefined) {
+        delete process.argv[1];
+      } else {
+        process.argv[1] = originalArgvEntry;
+      }
+    }
   });
 });

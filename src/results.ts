@@ -129,7 +129,9 @@ export function resultsFileFor(config: ResultsPathConfig, dir: string): string {
 }
 
 function isMissingFileError(e: unknown): boolean {
-  return e instanceof Error && 'code' in e && e.code === 'ENOENT';
+  if (!(e instanceof Error) || !Object.prototype.hasOwnProperty.call(e, 'code')) return false;
+  const code = (e as { code?: unknown }).code;
+  return typeof code === 'string' && code === 'ENOENT';
 }
 
 export function readLastReportResult(config: ResultsPathConfig, dir: string): ReadLastReportResult {

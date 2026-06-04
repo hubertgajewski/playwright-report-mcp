@@ -64,11 +64,16 @@ function withWorkingDir(
 }
 
 function spawnFailure(result: ReturnType<typeof runPlaywright>, timeoutMessage: string) {
-  if (!result.error) return null;
-  // Node's spawnSync({ timeout }) populates BOTH error.code='ETIMEDOUT' and signal='SIGTERM'
-  // when the timer fires, so this check must precede the generic spawn-failure branch.
-  if ('code' in result.error && result.error.code === 'ETIMEDOUT') return err(timeoutMessage);
-  return err(`Failed to spawn Playwright: ${result.error.message}`);
+  if (result.error) {
+    // Node's spawnSync({ timeout }) populates BOTH error.code='ETIMEDOUT' and signal='SIGTERM'
+    // when the timer fires, so this check must precede the generic spawn-failure branch.
+    if ('code' in result.error && result.error.code === 'ETIMEDOUT') return err(timeoutMessage);
+    return err(`Failed to spawn Playwright: ${result.error.message}`);
+  }
+  if (result.status === null && result.signal) {
+    return err(`Playwright terminated by signal: ${result.signal}`);
+  }
+  return null;
 }
 
 function parseLocationSuffix(spec: string): { path: string; suffix: string } | null {

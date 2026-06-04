@@ -156,6 +156,7 @@ export function mockNextSpawn(control: SpawnControl): SpawnControl {
 export function resetSpawnState() {
   spawnMock.mockReset();
   spawnControls = [];
+  processKillSpy?.mockRestore();
   processKillSpy = null;
 }
 

@@ -204,6 +204,16 @@ describe('run_tests — spawn failure', () => {
     expect(text).toContain('Failed to spawn Playwright');
     expect(text).toContain('ENOENT');
   });
+
+  it('returns error when Playwright is terminated by a signal', async () => {
+    spawnSyncMock.mockReturnValueOnce(spawnSyncResult({ status: null, signal: 'SIGTERM' }));
+    const result = await client.callTool({ name: 'run_tests', arguments: {} });
+    expect(result.isError).toBe(true);
+    const text = (result.content as TextContent[])[0].text;
+    expect(text).toContain('Playwright terminated by signal');
+    expect(text).toContain('SIGTERM');
+    expect(text).not.toContain('"stats"');
+  });
 });
 
 describe('run_tests — missing results.json', () => {

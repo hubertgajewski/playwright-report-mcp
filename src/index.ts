@@ -12,6 +12,15 @@ const defaultConfig = loadConfig();
 const server = createServer({ config: defaultConfig });
 const ALLOWED_DIRS = defaultConfig.allowedDirs;
 
+function isDirectRun(argvEntry: string | undefined): boolean {
+  if (!argvEntry) return false;
+  try {
+    return realpathSync(argvEntry) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+}
+
 export {
   ALLOWED_DIRS,
   buildListTestsCmd,
@@ -26,7 +35,7 @@ export {
   server,
 };
 
-if (realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isDirectRun(process.argv[1])) {
   process.stderr.write(
     formatStartupBanner(
       defaultConfig.launchCwd,

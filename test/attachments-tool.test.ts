@@ -60,92 +60,98 @@ describe('get_test_attachment — error gates', () => {
 
   it('rejects binary attachments with a descriptive error', async () => {
     const binaryPath = join(resultsDir, 'screenshot.png');
-    writeFileSync(binaryPath, 'fake-png-bytes');
-    writeCustomReport({
-      suites: [
-        {
-          title: 'x.spec.ts',
-          file: 'tests/x.spec.ts',
-          specs: [
-            {
-              title: 'binary test',
-              file: 'tests/x.spec.ts',
-              line: 1,
-              ok: false,
-              tests: [
-                {
-                  projectName: 'Chromium',
-                  status: 'unexpected',
-                  results: [
-                    {
-                      status: 'failed',
-                      duration: 10,
-                      attachments: [
-                        { name: 'screenshot', contentType: 'image/png', path: binaryPath },
-                      ],
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
-        },
-      ],
-      stats: { expected: 0, unexpected: 1, skipped: 0, duration: 10 },
-    });
+    try {
+      writeFileSync(binaryPath, 'fake-png-bytes');
+      writeCustomReport({
+        suites: [
+          {
+            title: 'x.spec.ts',
+            file: 'tests/x.spec.ts',
+            specs: [
+              {
+                title: 'binary test',
+                file: 'tests/x.spec.ts',
+                line: 1,
+                ok: false,
+                tests: [
+                  {
+                    projectName: 'Chromium',
+                    status: 'unexpected',
+                    results: [
+                      {
+                        status: 'failed',
+                        duration: 10,
+                        attachments: [
+                          { name: 'screenshot', contentType: 'image/png', path: binaryPath },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        stats: { expected: 0, unexpected: 1, skipped: 0, duration: 10 },
+      });
 
-    const result = await client.callTool({
-      name: 'get_test_attachment',
-      arguments: { testTitle: 'binary test', attachmentName: 'screenshot' },
-    });
-    expect(result.isError).toBe(true);
-    const text = (result.content as TextContent[])[0].text;
-    expect(text).toContain('binary');
-    expect(text).toContain('image/png');
-    unlinkSync(binaryPath);
+      const result = await client.callTool({
+        name: 'get_test_attachment',
+        arguments: { testTitle: 'binary test', attachmentName: 'screenshot' },
+      });
+      expect(result.isError).toBe(true);
+      const text = (result.content as TextContent[])[0].text;
+      expect(text).toContain('binary');
+      expect(text).toContain('image/png');
+    } finally {
+      rmSync(binaryPath, { force: true });
+    }
   });
 
   it('rejects attachments larger than MAX_BYTES', async () => {
     const bigPath = join(resultsDir, 'big.txt');
-    writeFileSync(bigPath, 'x'.repeat(1_000_001));
-    writeCustomReport({
-      suites: [
-        {
-          title: 'x.spec.ts',
-          file: 'tests/x.spec.ts',
-          specs: [
-            {
-              title: 'big test',
-              file: 'tests/x.spec.ts',
-              line: 1,
-              ok: false,
-              tests: [
-                {
-                  projectName: 'Chromium',
-                  status: 'unexpected',
-                  results: [
-                    {
-                      status: 'failed',
-                      duration: 10,
-                      attachments: [{ name: 'diag', contentType: 'text/plain', path: bigPath }],
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
-        },
-      ],
-      stats: { expected: 0, unexpected: 1, skipped: 0, duration: 10 },
-    });
+    try {
+      writeFileSync(bigPath, 'x'.repeat(1_000_001));
+      writeCustomReport({
+        suites: [
+          {
+            title: 'x.spec.ts',
+            file: 'tests/x.spec.ts',
+            specs: [
+              {
+                title: 'big test',
+                file: 'tests/x.spec.ts',
+                line: 1,
+                ok: false,
+                tests: [
+                  {
+                    projectName: 'Chromium',
+                    status: 'unexpected',
+                    results: [
+                      {
+                        status: 'failed',
+                        duration: 10,
+                        attachments: [{ name: 'diag', contentType: 'text/plain', path: bigPath }],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        stats: { expected: 0, unexpected: 1, skipped: 0, duration: 10 },
+      });
 
-    const result = await client.callTool({
-      name: 'get_test_attachment',
-      arguments: { testTitle: 'big test', attachmentName: 'diag' },
-    });
-    expect(result.isError).toBe(true);
-    expect((result.content as TextContent[])[0].text).toContain('too large');
-    unlinkSync(bigPath);
+      const result = await client.callTool({
+        name: 'get_test_attachment',
+        arguments: { testTitle: 'big test', attachmentName: 'diag' },
+      });
+      expect(result.isError).toBe(true);
+      expect((result.content as TextContent[])[0].text).toContain('too large');
+    } finally {
+      rmSync(bigPath, { force: true });
+    }
   });
 
   it('falls through to "not found" when the attachment file is missing from disk', async () => {
