@@ -22,7 +22,7 @@ jobs:
     steps:
       # workflow_run runs against the default branch by default, which may have drifted
       # past the release commit. Pin checkout to the upstream workflow's commit SHA.
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
