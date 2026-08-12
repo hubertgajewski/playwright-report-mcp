@@ -152,6 +152,13 @@ reporter: [
 
 Tested with **Claude Code (CLI)**. Should work with any MCP-compatible client that supports stdio transport, including Claude Desktop, Cursor, Cline, Windsurf, and Continue.dev — but these have not been verified.
 
+The stdio server supports both MCP protocol eras from one entrypoint:
+
+- **Modern:** protocol revision `2026-07-28`, selected by clients using version negotiation (for example, `versionNegotiation: { mode: "auto" }`).
+- **Legacy:** supported 2025-era revisions, selected by clients that use the traditional `initialize` handshake. This remains the default behavior in the MCP client SDK.
+
+The opening exchange pins one era for the connection lifetime. A client that pins an unsupported revision receives an explicit negotiation error; the server does not silently switch it to another era.
+
 ---
 
 ## Tools

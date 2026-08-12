@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { realpathSync } from 'fs';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { fileURLToPath } from 'url';
 import { formatStartupBanner, loadConfig, parseAllowedDirs } from './config.js';
 import { loadPackageMeta } from './package-meta.js';
@@ -43,5 +43,5 @@ if (isDirectRun(process.argv[1])) {
       process.env.PW_ALLOWED_DIRS
     )
   );
-  await server.connect(new StdioServerTransport());
+  serveStdio(() => createServer({ config: defaultConfig }));
 }
