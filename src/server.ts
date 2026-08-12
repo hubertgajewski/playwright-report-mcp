@@ -1,4 +1,4 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer } from '@modelcontextprotocol/server';
 import { spawnSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { z } from 'zod';
@@ -45,8 +45,7 @@ type ReportOrError = { ok: true; report: PwReport } | { ok: false; response: Too
 type ResolvedSpecArgument = { ok: true; arg: string } | { ok: false; response: ToolResult };
 
 type SpecCandidateResult =
-  | { ok: true; path: string }
-  | { ok: false; response: ToolResult; missing: boolean };
+  { ok: true; path: string } | { ok: false; response: ToolResult; missing: boolean };
 
 const LAST_REPORT_MESSAGES = {
   missing: 'No results.json found — run tests first.',
@@ -182,7 +181,7 @@ export function createServer(options: CreateServerOptions = {}) {
     'run_tests',
     {
       description: 'Run Playwright tests and return structured results.',
-      inputSchema: {
+      inputSchema: z.object({
         workingDirectory: workingDirectoryField,
         spec: z.string().optional().describe('Spec file path, e.g. tests/navigation.spec.ts'),
         browser: z
@@ -243,7 +242,7 @@ export function createServer(options: CreateServerOptions = {}) {
           ])
           .optional()
           .describe('Force Playwright tracing mode, overriding playwright.config.ts.'),
-      },
+      }),
     },
     async ({
       workingDirectory,
@@ -306,13 +305,13 @@ export function createServer(options: CreateServerOptions = {}) {
     {
       description:
         'Return status for a tracked Playwright run. Pass runId for a specific background run, or omit it to inspect the latest tracked run for a workingDirectory. If no tracked run exists, returns idle with current results.json metadata; it does not inspect unrelated OS processes.',
-      inputSchema: {
+      inputSchema: z.object({
         workingDirectory: runStatusWorkingDirectoryField,
         runId: z
           .string()
           .optional()
           .describe('Run identifier returned by run_tests with wait=false.'),
-      },
+      }),
     },
     async ({ workingDirectory, runId }) => {
       if (runId) {
@@ -343,9 +342,9 @@ export function createServer(options: CreateServerOptions = {}) {
     {
       description:
         'Return failed tests from the last run with error messages and attachment paths.',
-      inputSchema: {
+      inputSchema: z.object({
         workingDirectory: workingDirectoryField,
-      },
+      }),
     },
     async ({ workingDirectory }) => {
       return withWorkingDir(config, workingDirectory, (wd) => {
@@ -382,11 +381,11 @@ export function createServer(options: CreateServerOptions = {}) {
     'get_test_attachment',
     {
       description: 'Read the content of a named attachment for a specific test from the last run.',
-      inputSchema: {
+      inputSchema: z.object({
         workingDirectory: workingDirectoryField,
         testTitle: z.string().describe('Exact test title as shown in the report'),
         attachmentName: z.string().describe('Attachment name, e.g. "AI diagnosis", "DOM"'),
-      },
+      }),
     },
     async ({ workingDirectory, testTitle, attachmentName }) => {
       return withWorkingDir(config, workingDirectory, (wd) => {
@@ -450,10 +449,10 @@ export function createServer(options: CreateServerOptions = {}) {
     'list_tests',
     {
       description: 'List all tests with their spec file and tags without running them.',
-      inputSchema: {
+      inputSchema: z.object({
         workingDirectory: workingDirectoryField,
         tag: z.string().optional().describe('Filter by tag, e.g. @smoke'),
-      },
+      }),
     },
     async ({ workingDirectory, tag }) => {
       return withWorkingDir(config, workingDirectory, (wd) => {

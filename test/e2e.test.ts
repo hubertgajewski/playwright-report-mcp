@@ -8,8 +8,12 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import {
+  Client,
+  ProtocolErrorCode,
+  UnsupportedProtocolVersionError,
+} from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { existsSync, readdirSync } from 'fs';
 import { homedir } from 'os';
 import { join, resolve } from 'path';
@@ -50,6 +54,101 @@ if (SKIP) {
 
 type TextContent = { type: 'text'; text: string };
 
+const TOOL_NAMES = [
+  'get_failed_tests',
+  'get_run_status',
+  'get_test_attachment',
+  'list_tests',
+  'run_tests',
+];
+
+function serverEnvironment(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
+
+function serverTransport() {
+  return new StdioClientTransport({
+    command: 'node',
+    args: [DIST_INDEX],
+    cwd: PW_PROJECT,
+    env: serverEnvironment(),
+  });
+}
+
+describe.skipIf(!existsSync(DIST_INDEX))('MCP stdio protocol negotiation', () => {
+  it('selects the modern era in auto mode and exposes working tools', async () => {
+    const modernClient = new Client(
+      { name: 'modern-e2e-client', version: '1.0.0' },
+      { versionNegotiation: { mode: 'auto' } }
+    );
+
+    try {
+      await modernClient.connect(serverTransport());
+      expect(modernClient.getProtocolEra()).toBe('modern');
+
+      const tools = await modernClient.listTools();
+      expect(tools.tools.map(({ name }) => name).sort()).toEqual(TOOL_NAMES);
+
+      const status = await modernClient.callTool({
+        name: 'get_run_status',
+        arguments: {},
+      });
+      expect(status.isError).toBeFalsy();
+      expect(JSON.parse((status.content as TextContent[])[0].text)).toMatchObject({
+        state: 'idle',
+        tracking: false,
+      });
+    } finally {
+      await modernClient.close();
+    }
+  }, 30_000);
+
+  it('keeps the default client on the legacy era with the same tool surface', async () => {
+    const legacyClient = new Client({ name: 'legacy-e2e-client', version: '1.0.0' });
+
+    try {
+      await legacyClient.connect(serverTransport());
+      expect(legacyClient.getProtocolEra()).toBe('legacy');
+      const tools = await legacyClient.listTools();
+      expect(tools.tools.map(({ name }) => name).sort()).toEqual(TOOL_NAMES);
+    } finally {
+      await legacyClient.close();
+    }
+  }, 30_000);
+
+  it('rejects a pinned unsupported revision without falling back', async () => {
+    const pinnedClient = new Client(
+      { name: 'pinned-e2e-client', version: '1.0.0' },
+      { versionNegotiation: { mode: { pin: '2099-01-01' } } }
+    );
+
+    try {
+      let rejection: unknown;
+      try {
+        await pinnedClient.connect(serverTransport());
+      } catch (error) {
+        rejection = error;
+      }
+
+      expect(rejection).toBeInstanceOf(UnsupportedProtocolVersionError);
+      expect(rejection).toMatchObject({
+        code: ProtocolErrorCode.UnsupportedProtocolVersion,
+        data: {
+          requested: '2099-01-01',
+          supported: expect.arrayContaining(['2026-07-28']),
+        },
+      });
+      expect(pinnedClient.getProtocolEra()).toBeUndefined();
+    } finally {
+      await pinnedClient.close();
+    }
+  }, 30_000);
+});
+
 let client: Client;
 
 function parseResult(result: Awaited<ReturnType<typeof client.callTool>>) {
@@ -59,19 +158,9 @@ function parseResult(result: Awaited<ReturnType<typeof client.callTool>>) {
 
 describe.skipIf(SKIP)('MCP server e2e — fixture Playwright project', () => {
   beforeAll(async () => {
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
-      if (v !== undefined) env[k] = v;
-    }
     // Launch the server with cwd = fixture project so default workingDirectory="." resolves there.
-    const transport = new StdioClientTransport({
-      command: 'node',
-      args: [DIST_INDEX],
-      cwd: PW_PROJECT,
-      env,
-    });
     client = new Client({ name: 'e2e-client', version: '1.0.0' });
-    await client.connect(transport);
+    await client.connect(serverTransport());
   }, 30_000);
 
   afterAll(async () => {
@@ -86,6 +175,10 @@ describe.skipIf(SKIP)('MCP server e2e — fixture Playwright project', () => {
     it('advertises name and version from package.json', () => {
       const info = client.getServerVersion();
       expect(info).toMatchObject({ name: pkg.name, version: pkg.version });
+    });
+
+    it('uses the legacy protocol era by default', () => {
+      expect(client.getProtocolEra()).toBe('legacy');
     });
   });
 
