@@ -95,10 +95,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
-            if RESPONSE=$(curl -sSfL --get "${MCP_REGISTRY_SEARCH_URL}" --data-urlencode "search=$NAME"); then
+          for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
+            if RESPONSE=$(curl -sSfL --connect-timeout 5 --max-time 10 --get \
+              "${MCP_REGISTRY_SEARCH_URL}" --data-urlencode "search=$NAME"); then
               if FOUND=$(jq -r --arg n "$NAME" --arg v "$VERSION" \
-                '[.servers[]? | select(.server.name == $n and .server.version == $v)] | length' <<<"$RESPONSE"); then
+                'if (.servers | type) == "array" then
+                  [.servers[] | select(.server.name == $n and .server.version == $v)] | length
+                else
+                  error("expected .servers to be an array")
+                end' <<<"$RESPONSE"); then
                 if [ "$FOUND" != "0" ]; then
                   echo "Published ${NAME}@${VERSION} is visible in the registry (attempt ${attempt}/${MAX_ATTEMPTS})."
                   exit 0
