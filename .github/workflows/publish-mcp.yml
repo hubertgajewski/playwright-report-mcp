@@ -17,6 +17,7 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       MCP_REGISTRY_SEARCH_URL: https://registry.modelcontextprotocol.io/v0.1/servers
     steps:
@@ -89,17 +90,32 @@ jobs:
         env:
           NAME: ${{ steps.meta.outputs.name }}
           VERSION: ${{ steps.meta.outputs.version }}
+          MAX_ATTEMPTS: 12
+          RETRY_DELAY_SECONDS: 10
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            FOUND=$(curl -sSfL --get "${MCP_REGISTRY_SEARCH_URL}" --data-urlencode "search=$NAME" \
-              | jq -r --arg n "$NAME" --arg v "$VERSION" '[.servers[]? | select(.server.name == $n and .server.version == $v)] | length')
-            if [ "$FOUND" != "0" ]; then
-              echo "Published ${NAME}@${VERSION} is visible in the registry (attempt ${attempt})."
-              exit 0
+
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+            if RESPONSE=$(curl -sSfL --get "${MCP_REGISTRY_SEARCH_URL}" --data-urlencode "search=$NAME"); then
+              if FOUND=$(jq -r --arg n "$NAME" --arg v "$VERSION" \
+                '[.servers[]? | select(.server.name == $n and .server.version == $v)] | length' <<<"$RESPONSE"); then
+                if [ "$FOUND" != "0" ]; then
+                  echo "Published ${NAME}@${VERSION} is visible in the registry (attempt ${attempt}/${MAX_ATTEMPTS})."
+                  exit 0
+                fi
+              else
+                echo "::warning::Registry search returned an invalid response on attempt ${attempt}/${MAX_ATTEMPTS}."
+              fi
+            else
+              echo "::warning::Registry search failed on attempt ${attempt}/${MAX_ATTEMPTS}."
             fi
-            echo "Attempt ${attempt}: ${NAME}@${VERSION} not yet visible; sleeping 5s."
-            sleep 5
+
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              echo "Attempt ${attempt}/${MAX_ATTEMPTS}: ${NAME}@${VERSION} not yet visible; sleeping ${RETRY_DELAY_SECONDS}s."
+              sleep "$RETRY_DELAY_SECONDS"
+            fi
           done
-          echo "::error::Published but ${NAME}@${VERSION} not visible in the MCP registry search after 3 attempts."
+
+          MAX_WAIT_SECONDS=$(( (MAX_ATTEMPTS - 1) * RETRY_DELAY_SECONDS ))
+          echo "::error::Published ${NAME}@${VERSION} was not visible after ${MAX_ATTEMPTS} attempts over ${MAX_WAIT_SECONDS}s."
           exit 1
