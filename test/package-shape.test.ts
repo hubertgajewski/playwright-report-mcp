@@ -49,6 +49,7 @@ describe('package source and publish shape', () => {
     for (const modulePath of [
       'src/server.ts',
       'src/config.ts',
+      'src/env-policy.ts',
       'src/path-policy.ts',
       'src/results.ts',
       'src/run-tracker.ts',

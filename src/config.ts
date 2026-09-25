@@ -1,4 +1,5 @@
 import { delimiter, resolve } from 'path';
+import { parseAllowedEnv } from './env-policy.js';
 import { canonicalize } from './path-policy.js';
 
 export interface ServerConfig {
@@ -6,6 +7,7 @@ export interface ServerConfig {
   allowedDirs: string[];
   allowedDirsReal: string[];
   resultsFileOverride: string | null;
+  allowedEnv: string[];
 }
 
 /**
@@ -32,23 +34,30 @@ export function loadConfig(
     // never matches a real resolved path until the directory exists.
     allowedDirsReal: allowedDirs.map(canonicalize),
     resultsFileOverride: env.PW_RESULTS_FILE ? resolve(cwd, env.PW_RESULTS_FILE) : null,
+    allowedEnv: parseAllowedEnv(env.PW_ALLOWED_ENV),
   };
 }
 
 /**
- * Format the one-line startup banner written to stderr when the server runs as
- * a CLI. Extracted from the inline `process.stderr.write(...)` so operators'
+ * Format the startup banner written to stderr when the server runs as a CLI.
+ * Extracted from the inline `process.stderr.write(...)` so operators'
  * assumptions about what appears in their logs are covered by unit tests.
  */
 export function formatStartupBanner(
   cwd: string,
   allowed: string[],
-  rawEnv: string | undefined
+  rawEnv: string | undefined,
+  allowedEnv: string[] = []
 ): string {
   const isDefault = rawEnv === undefined || rawEnv === '';
   const suffix = isDefault ? ' (default — authorizing only launchCwd)' : '';
+  const envLine =
+    allowedEnv.length === 0
+      ? '[playwright-report-mcp] PW_ALLOWED_ENV=(disabled)\n'
+      : `[playwright-report-mcp] PW_ALLOWED_ENV=${allowedEnv.join(', ')}\n`;
   return (
     `[playwright-report-mcp] launchCwd=${cwd}\n` +
-    `[playwright-report-mcp] PW_ALLOWED_DIRS=${allowed.join(', ')}${suffix}\n`
+    `[playwright-report-mcp] PW_ALLOWED_DIRS=${allowed.join(', ')}${suffix}\n` +
+    envLine
   );
 }

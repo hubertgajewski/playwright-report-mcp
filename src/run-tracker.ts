@@ -25,6 +25,7 @@ interface TrackedRun {
   id: string;
   cwd: string;
   cmd: string[];
+  envKeys: string[];
   pid: number | null;
   state: TrackedRunState;
   startedAt: string;
@@ -108,7 +109,9 @@ export class RunTracker {
   startTrackedRun(
     cmd: string[],
     cwd: string,
-    timeoutMs: number
+    timeoutMs: number,
+    env: NodeJS.ProcessEnv = process.env,
+    envKeys: string[] = []
   ): { run: TrackedRun } | { error: string } {
     const startError = this.startRunError(cwd);
     if (startError) return { error: startError };
@@ -118,6 +121,7 @@ export class RunTracker {
       id: nextStableRunId(),
       cwd,
       cmd,
+      envKeys,
       pid: null,
       state: 'running',
       startedAt: new Date(now).toISOString(),
@@ -156,6 +160,7 @@ export class RunTracker {
     try {
       child = spawn(cmd[0], cmd.slice(1), {
         cwd,
+        env,
         detached: process.platform !== 'win32',
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -233,6 +238,7 @@ export class RunTracker {
         args: run.cmd.slice(1),
         cwd: run.cwd,
       },
+      ...(run.envKeys.length > 0 ? { envKeys: run.envKeys } : {}),
       progress:
         run.completedAt === null
           ? run.progress

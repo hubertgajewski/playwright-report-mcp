@@ -40,7 +40,8 @@ if (isDirectRun(process.argv[1])) {
     formatStartupBanner(
       defaultConfig.launchCwd,
       defaultConfig.allowedDirs,
-      process.env.PW_ALLOWED_DIRS
+      process.env.PW_ALLOWED_DIRS,
+      defaultConfig.allowedEnv
     )
   );
   serveStdio(() => createServer({ config: defaultConfig }));
