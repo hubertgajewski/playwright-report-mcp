@@ -3,6 +3,7 @@ import { spawnSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { z } from 'zod';
 import { loadConfig, type ServerConfig } from './config.js';
+import { validateEnvOverrides } from './env-policy.js';
 import { errorMessage } from './errors.js';
 import { loadPackageMeta, type PackageMeta } from './package-meta.js';
 import { resolveContainedRealPath, resolveWorkingDir } from './path-policy.js';
@@ -17,9 +18,10 @@ import {
 } from './results.js';
 import { RunTracker } from './run-tracker.js';
 
-function runPlaywright(cmd: string[], cwd: string, timeoutMs: number) {
+function runPlaywright(cmd: string[], cwd: string, timeoutMs: number, env: NodeJS.ProcessEnv) {
   return spawnSync(cmd[0], cmd.slice(1), {
     cwd,
+    env,
     encoding: 'utf8',
     timeout: timeoutMs,
     maxBuffer: 10 * 1024 * 1024,
@@ -61,6 +63,13 @@ function withWorkingDir(
   if ('error' in wd) return err(wd.error);
   return handler(wd);
 }
+
+const envField = z
+  .record(z.string(), z.string())
+  .optional()
+  .describe(
+    'Environment variable overrides for the Playwright child process. Each key must be listed in PW_ALLOWED_ENV. Dangerous names (NODE_*, NPM_CONFIG_*, PATH, proxies, secrets) are always rejected. Values are never echoed in get_run_status.'
+  );
 
 function spawnFailure(result: ReturnType<typeof runPlaywright>, timeoutMessage: string) {
   if (result.error) {
@@ -230,6 +239,7 @@ export function createServer(options: CreateServerOptions = {}) {
           .positive()
           .optional()
           .describe('Stop the run after this many failures.'),
+        env: envField,
         trace: z
           .enum([
             'on',
@@ -256,9 +266,13 @@ export function createServer(options: CreateServerOptions = {}) {
       workers,
       retries,
       maxFailures,
+      env,
       trace,
     }) => {
       return withWorkingDir(config, workingDirectory, async (wd) => {
+        const childEnv = validateEnvOverrides(config.allowedEnv, env);
+        if ('error' in childEnv) return err(childEnv.error);
+
         const cmd = ['npx', 'playwright', 'test'];
         if (spec) {
           const specArg = resolveSpecArgument(wd.dir, spec);
@@ -276,12 +290,18 @@ export function createServer(options: CreateServerOptions = {}) {
 
         const effectiveTimeout = timeout ?? 300_000;
         if (wait === false) {
-          const started = runTracker.startTrackedRun(cmd, wd.dir, effectiveTimeout);
+          const started = runTracker.startTrackedRun(
+            cmd,
+            wd.dir,
+            effectiveTimeout,
+            childEnv.env,
+            childEnv.keys
+          );
           if ('error' in started) return err(started.error);
           return ok(runTracker.runStatus(started.run));
         }
 
-        const result = runPlaywright(cmd, wd.dir, effectiveTimeout);
+        const result = runPlaywright(cmd, wd.dir, effectiveTimeout, childEnv.env);
         const failure = spawnFailure(
           result,
           `Playwright test run exceeded the ${effectiveTimeout}ms timeout and was killed.`
@@ -452,12 +472,16 @@ export function createServer(options: CreateServerOptions = {}) {
       inputSchema: z.object({
         workingDirectory: workingDirectoryField,
         tag: z.string().optional().describe('Filter by tag, e.g. @smoke'),
+        env: envField,
       }),
     },
-    async ({ workingDirectory, tag }) => {
+    async ({ workingDirectory, tag, env }) => {
       return withWorkingDir(config, workingDirectory, (wd) => {
+        const childEnv = validateEnvOverrides(config.allowedEnv, env);
+        if ('error' in childEnv) return err(childEnv.error);
+
         const listTimeout = 30_000;
-        const result = runPlaywright(buildListTestsCmd(tag), wd.dir, listTimeout);
+        const result = runPlaywright(buildListTestsCmd(tag), wd.dir, listTimeout, childEnv.env);
         const failure = spawnFailure(
           result,
           `Listing Playwright tests exceeded the ${listTimeout}ms timeout and was killed.`

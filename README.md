@@ -182,6 +182,7 @@ Runs the Playwright test suite and returns structured pass/fail results.
 | `workers`          | integer (optional) | Number of parallel workers. Positive integer only; the `"50%"` string form is not yet supported.                                                                                                                                                                |
 | `retries`          | integer (optional) | Maximum retry count for flaky tests. `0` explicitly disables retries; omit to use the project's config.                                                                                                                                                         |
 | `maxFailures`      | integer (optional) | Stop the run after this many failures. Positive integer.                                                                                                                                                                                                        |
+| `env`              | object (optional)  | String-to-string map merged onto the Playwright child environment. Each key must be listed in `PW_ALLOWED_ENV`. Dangerous and secret names are always rejected. See [Environment overrides](#environment-overrides).                                            |
 | `trace`            | enum (optional)    | Force Playwright tracing mode, overriding `playwright.config.ts`. One of `on`, `off`, `on-first-retry`, `on-all-retries`, `retain-on-failure`, `retain-on-first-failure`, `retain-on-failure-and-retries`.                                                      |
 
 Returns: exit code, run stats, and a summary of all tests with status, duration, and error per project.
@@ -199,7 +200,7 @@ Returns the current status for a non-blocking run started by `run_tests` with `w
 
 If both fields are omitted, `workingDirectory` defaults to `"."`. If no run is tracked for the resolved directory, the tool returns `state: "idle"` plus `results.json` metadata and last parsed stats when readable. It does not process-scan for external `npx playwright test` commands that were not started through this MCP server.
 
-Returns: run state, tracking flag, pid, timestamps, elapsed duration, timeout, command metadata, `progress: { current, total }`, exit code, signal, spawn/timeout error when present, `results.json` path/existence/mtime/size/freshness, and parsed report stats when the report was updated after the run started. When progress has not appeared yet, `current` and `total` are `null`; when a terminal run has readable final stats, progress is set to the derived completed total.
+Returns: run state, tracking flag, pid, timestamps, elapsed duration, timeout, command metadata (`executable`, `args`, `cwd`), optional `envKeys` (override names only — never values), `progress: { current, total }`, exit code, signal, spawn/timeout error when present, `results.json` path/existence/mtime/size/freshness, and parsed report stats when the report was updated after the run started. When progress has not appeared yet, `current` and `total` are `null`; when a terminal run has readable final stats, progress is set to the derived completed total.
 
 ### `get_failed_tests`
 
@@ -227,10 +228,11 @@ Returns: the attachment content as text. Binary attachments and files over 1 MB 
 
 Lists all tests with their spec file and tags without running them.
 
-| Input              | Type              | Description                                                               |
-| ------------------ | ----------------- | ------------------------------------------------------------------------- |
-| `workingDirectory` | string (optional) | See [Multi-worktree support](#multi-worktree-support). Defaults to `"."`. |
-| `tag`              | string (optional) | Filter by tag, e.g. `@smoke`                                              |
+| Input              | Type              | Description                                                                                                 |
+| ------------------ | ----------------- | ----------------------------------------------------------------------------------------------------------- |
+| `workingDirectory` | string (optional) | See [Multi-worktree support](#multi-worktree-support). Defaults to `"."`.                                   |
+| `tag`              | string (optional) | Filter by tag, e.g. `@smoke`                                                                                |
+| `env`              | object (optional) | Same allowlisted child-environment map as `run_tests`. See [Environment overrides](#environment-overrides). |
 
 ---
 
@@ -282,10 +284,11 @@ Add to your `.mcp.json` at the root of your project:
 
 ### Environment variables
 
-| Variable          | Default                                        | Description                                                                                                                                                                      |
-| ----------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PW_ALLOWED_DIRS` | `"."` (authorizes only the launch dir)         | `path.delimiter`-separated list of directories the `workingDirectory` parameter may point at. Entries may be absolute or relative (resolved once against launch cwd at startup). |
-| `PW_RESULTS_FILE` | `<workingDirectory>/test-results/results.json` | Absolute path to the JSON reporter output file. If set, overrides the per-call default for every call.                                                                           |
+| Variable          | Default                                        | Description                                                                                                                                                                                                      |
+| ----------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PW_ALLOWED_DIRS` | `"."` (authorizes only the launch dir)         | `path.delimiter`-separated list of directories the `workingDirectory` parameter may point at. Entries may be absolute or relative (resolved once against launch cwd at startup).                                 |
+| `PW_ALLOWED_ENV`  | unset (the `env` tool argument is disabled)    | Comma-separated list of environment variable names `run_tests` and `list_tests` may override. Unset or empty rejects any `env` argument and does not spawn. See [Environment overrides](#environment-overrides). |
+| `PW_RESULTS_FILE` | `<workingDirectory>/test-results/results.json` | Absolute path to the JSON reporter output file. If set, overrides the per-call default for every call.                                                                                                           |
 
 Set `PW_RESULTS_FILE` if your `playwright.config.ts` writes the report to a non-default location. Leave it unset in multi-worktree setups so each `workingDirectory` gets its own `test-results/results.json`.
 
@@ -324,6 +327,71 @@ Then point calls at any sibling worktree:
 **Multiple projects.** Either launch the MCP client from each project and use the default allowlist, or set `PW_ALLOWED_DIRS` to the shared parent and pass `workingDirectory` per call. The allowlist check runs at a path-segment boundary, so an entry authorizing `/src/my-app` will not authorize `/src/my-app-evil`.
 
 > **Breaking change (2.x → next):** the `PW_DIR` env var has been removed. Either launch the MCP client from inside the Playwright project directory (zero-config, default `workingDirectory: "."` works), or pass `workingDirectory` per call and set `PW_ALLOWED_DIRS` accordingly.
+
+### Environment overrides
+
+`run_tests` and `list_tests` accept an optional `env` map that is merged onto the MCP process environment before spawning Playwright. The child therefore sees operator-allowlisted overrides on top of launch env and the parent process. Playwright configs that load dotenv without overriding existing variables keep the tool-supplied value.
+
+The `env` argument is off until the operator sets `PW_ALLOWED_ENV` in `.mcp.json`. That is the same containment model as `PW_ALLOWED_DIRS`: the human expands what the model may do; the model cannot widen it.
+
+A hard denylist always wins over the allowlist (comparison is case-insensitive):
+
+- prefixes `NODE_`, `LD_`, `DYLD_`, `NPM_CONFIG_` (the child is launched with `npx`, which reads npm config from the environment)
+- `PATH`, `HOME`, `DOTENV_CONFIG_PATH`
+- proxy variables `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, `FTP_PROXY`
+- any name matching `PASSWORD`, `SECRET`, `TOKEN`, `API_KEY`, `ACCESS_KEY`, `CREDENTIAL`, `PRIVATE_KEY`, `AUTH_SOCK`, or `AUTH_CONFIG`
+
+Keys must be POSIX names (`^[A-Z_][A-Z0-9_]*$`). Values cannot contain a NUL and are capped at 256 characters, with at most 16 entries per call. The value of `ENV` is further restricted to `^[A-Za-z0-9._-]+$` so it cannot be used as a POSIX shell startup-file path (`ENV=/tmp/evil.sh` is rejected).
+
+Secrets (basic auth, passwords, API keys) stay in the project `.env` or in MCP **launch** env. They are never tool arguments. `get_run_status` may list override **names** as `envKeys` and never echoes override **values**. There is no `envFile` tool argument.
+
+**Target environment name** (`ENV=staging`):
+
+```json
+{
+  "mcpServers": {
+    "playwright-report-mcp": {
+      "command": "npx",
+      "args": ["-y", "playwright-report-mcp"],
+      "env": {
+        "PW_ALLOWED_DIRS": "..",
+        "PW_ALLOWED_ENV": "ENV"
+      },
+      "type": "stdio"
+    }
+  }
+}
+```
+
+```json
+{
+  "workingDirectory": "playwright/typescript",
+  "env": { "ENV": "staging" }
+}
+```
+
+**Other project switches** (`TEST_ENV` or `BASE_URL`):
+
+```json
+{
+  "mcpServers": {
+    "playwright-report-mcp": {
+      "command": "npx",
+      "args": ["-y", "playwright-report-mcp"],
+      "env": { "PW_ALLOWED_ENV": "TEST_ENV,BASE_URL" },
+      "type": "stdio"
+    }
+  }
+}
+```
+
+```json
+{ "env": { "TEST_ENV": "qa" } }
+```
+
+```json
+{ "env": { "BASE_URL": "https://stage.example.com" } }
+```
 
 ---
 

@@ -1,4 +1,4 @@
-import { formatStartupBanner, parseAllowedDirs } from '../src/config.js';
+import { formatStartupBanner, loadConfig, parseAllowedDirs } from '../src/config.js';
 import { describe, expect, it } from 'vitest';
 
 describe('parseAllowedDirs — startup resolution', () => {
@@ -57,5 +57,34 @@ describe('formatStartupBanner — AC7 startup log', () => {
   it('terminates with a newline so it does not run into subsequent log lines', () => {
     const banner = formatStartupBanner('/x', ['/x'], undefined);
     expect(banner.endsWith('\n')).toBe(true);
+  });
+
+  it('annotates PW_ALLOWED_ENV as disabled when no keys are configured', () => {
+    const banner = formatStartupBanner('/x', ['/x'], undefined, []);
+    expect(banner).toContain('PW_ALLOWED_ENV=(disabled)');
+  });
+
+  it('lists configured PW_ALLOWED_ENV keys', () => {
+    const banner = formatStartupBanner('/x', ['/x'], '..', ['ENV', 'BASE_URL']);
+    expect(banner).toContain('PW_ALLOWED_ENV=ENV, BASE_URL');
+    expect(banner).not.toContain('PW_ALLOWED_ENV=(disabled)');
+  });
+});
+
+describe('loadConfig — PW_ALLOWED_ENV', () => {
+  it('defaults allowedEnv to an empty list when unset', () => {
+    expect(loadConfig({}, '/tmp').allowedEnv).toEqual([]);
+  });
+
+  it('defaults allowedEnv to an empty list when empty', () => {
+    expect(loadConfig({ PW_ALLOWED_ENV: '' }, '/tmp').allowedEnv).toEqual([]);
+  });
+
+  it('parses comma-separated keys at startup', () => {
+    expect(loadConfig({ PW_ALLOWED_ENV: 'ENV,TEST_ENV,BASE_URL' }, '/tmp').allowedEnv).toEqual([
+      'ENV',
+      'TEST_ENV',
+      'BASE_URL',
+    ]);
   });
 });

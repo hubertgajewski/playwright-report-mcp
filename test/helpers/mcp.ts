@@ -213,13 +213,18 @@ export function trySymlink(target: string, path: string): boolean {
 
 export let client: Client;
 
+export async function connectMcpClient(config: ReturnType<typeof loadConfig>): Promise<Client> {
+  const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
+  await createServer({ config }).connect(serverTransport);
+  const connected = new Client({ name: 'test-client', version: '1.0.0' });
+  await connected.connect(clientTransport);
+  return connected;
+}
+
 export function setupMcpClient() {
   beforeAll(async () => {
     writeDefaultReport();
-    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair();
-    await createServer({ config: TEST_CONFIG }).connect(serverTransport);
-    client = new Client({ name: 'test-client', version: '1.0.0' });
-    await client.connect(clientTransport);
+    client = await connectMcpClient(TEST_CONFIG);
   });
 
   afterAll(async () => {
@@ -267,6 +272,7 @@ const RunStatusResultSchema = z.object({
   elapsedMs: z.number(),
   timeoutMs: z.number().nullable(),
   command: RunCommandSchema.nullable(),
+  envKeys: z.array(z.string()).optional(),
   progress: ProgressSchema,
   exitCode: z.number().nullable(),
   signal: z.string().nullable(),
