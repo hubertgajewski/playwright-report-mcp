@@ -92,6 +92,11 @@ describe('validateEnvOverrides — denylist and secrets', () => {
     'HOME',
     'DOTENV_CONFIG_PATH',
     'BASIC_AUTH_PASSWORD',
+    'AWS_ACCESS_KEY_ID',
+    'SSH_AUTH_SOCK',
+    'DOCKER_AUTH_CONFIG',
+    'NPM_CONFIG_REGISTRY',
+    'npm_config_registry',
   ];
 
   for (const key of dangerous) {
@@ -106,6 +111,14 @@ describe('validateEnvOverrides — denylist and secrets', () => {
 
   it('rejects DYLD_INSERT_LIBRARIES via the DYLD_ prefix', () => {
     expectError(['DYLD_INSERT_LIBRARIES'], { DYLD_INSERT_LIBRARIES: '/tmp/x.dylib' }, 'DYLD_');
+  });
+
+  it('rejects NPM_CONFIG_SCRIPT_SHELL via the NPM_CONFIG_ prefix', () => {
+    expectError(
+      ['NPM_CONFIG_SCRIPT_SHELL'],
+      { NPM_CONFIG_SCRIPT_SHELL: '/tmp/evil' },
+      'NPM_CONFIG_SCRIPT_SHELL'
+    );
   });
 
   it('rejects names matching TOKEN even when allowlisted', () => {
@@ -143,7 +156,7 @@ describe('validateEnvOverrides — invalid shape', () => {
     expect(result.error).not.toContain(marker);
   });
 
-  it('rejects an ENV value longer than 256 characters', () => {
+  it('rejects an env value longer than 256 characters', () => {
     expectError(['TEST_ENV'], { TEST_ENV: 'x'.repeat(257) }, '256');
   });
 });

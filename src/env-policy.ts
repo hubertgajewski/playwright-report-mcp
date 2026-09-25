@@ -1,6 +1,7 @@
 const POSIX_KEY = /^[A-Z_][A-Z0-9_]*$/;
 const ENV_SAFE_VALUE = /^[A-Za-z0-9._-]+$/;
-const SECRET_NAME = /PASSWORD|SECRET|TOKEN|API_KEY|CREDENTIAL|PRIVATE_KEY/i;
+const SECRET_NAME =
+  /PASSWORD|SECRET|TOKEN|API_KEY|ACCESS_KEY|CREDENTIAL|PRIVATE_KEY|AUTH_SOCK|AUTH_CONFIG/i;
 
 const MAX_ENV_ENTRIES = 16;
 const MAX_ENV_VALUE_LENGTH = 256;
@@ -16,7 +17,9 @@ const DENY_EXACT = new Set([
   'FTP_PROXY',
 ]);
 
-const DENY_PREFIXES = ['NODE_', 'LD_', 'DYLD_'] as const;
+// npm reads npm_config_* case-insensitively, and the child is `npx`, so these keys can swap the
+// registry or the script shell that launches Playwright.
+const DENY_PREFIXES = ['NODE_', 'LD_', 'DYLD_', 'NPM_CONFIG_'] as const;
 
 export function parseAllowedEnv(raw: string | undefined): string[] {
   if (raw === undefined || raw.trim() === '') return [];

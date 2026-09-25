@@ -68,7 +68,7 @@ const envField = z
   .record(z.string(), z.string())
   .optional()
   .describe(
-    'Environment variable overrides for the Playwright child process. Each key must be listed in PW_ALLOWED_ENV. Dangerous names (NODE_*, PATH, proxies, secrets) are always rejected. Values are never echoed in get_run_status.'
+    'Environment variable overrides for the Playwright child process. Each key must be listed in PW_ALLOWED_ENV. Dangerous names (NODE_*, NPM_CONFIG_*, PATH, proxies, secrets) are always rejected. Values are never echoed in get_run_status.'
   );
 
 function spawnFailure(result: ReturnType<typeof runPlaywright>, timeoutMessage: string) {

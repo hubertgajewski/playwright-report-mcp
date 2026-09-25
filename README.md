@@ -336,10 +336,10 @@ The `env` argument is off until the operator sets `PW_ALLOWED_ENV` in `.mcp.json
 
 A hard denylist always wins over the allowlist (comparison is case-insensitive):
 
-- prefixes `NODE_`, `LD_`, `DYLD_`
+- prefixes `NODE_`, `LD_`, `DYLD_`, `NPM_CONFIG_` (the child is launched with `npx`, which reads npm config from the environment)
 - `PATH`, `HOME`, `DOTENV_CONFIG_PATH`
 - proxy variables `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, `FTP_PROXY`
-- any name matching `PASSWORD`, `SECRET`, `TOKEN`, `API_KEY`, `CREDENTIAL`, or `PRIVATE_KEY`
+- any name matching `PASSWORD`, `SECRET`, `TOKEN`, `API_KEY`, `ACCESS_KEY`, `CREDENTIAL`, `PRIVATE_KEY`, `AUTH_SOCK`, or `AUTH_CONFIG`
 
 Keys must be POSIX names (`^[A-Z_][A-Z0-9_]*$`). Values cannot contain a NUL and are capped at 256 characters, with at most 16 entries per call. The value of `ENV` is further restricted to `^[A-Za-z0-9._-]+$` so it cannot be used as a POSIX shell startup-file path (`ENV=/tmp/evil.sh` is rejected).
 
