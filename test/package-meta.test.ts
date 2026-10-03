@@ -98,7 +98,11 @@ describe('loadPackageMeta', () => {
     expect(() => loadPackageMeta(distDir)).toThrow(/Could not locate package\.json/);
   });
 
-  it('includes the baseDir in the thrown error message for diagnosability', () => {
-    expect(() => loadPackageMeta(distDir)).toThrow(new RegExp(distDir.replace(/\./g, '\\.')));
-  });
+  it.each(['plain', 'path[1]', 'path(', String.raw`windows\path`])(
+    'includes the literal baseDir in the thrown error message: %s',
+    (pathSegment) => {
+      const baseDir = join(distDir, pathSegment);
+      expect(() => loadPackageMeta(baseDir)).toThrow(baseDir);
+    }
+  );
 });
